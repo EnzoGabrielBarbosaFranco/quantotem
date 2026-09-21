@@ -1,6 +1,6 @@
 {
-  "name": "Conta Aí — Controle financeiro",
-  "short_name": "Conta Aí",
+  "name": "Quanto Tem — Controle financeiro",
+  "short_name": "Quanto Tem",
   "description": "Controle financeiro pessoal local-first com sincronização criptografada opcional.",
   "lang": "pt-BR",
   "start_url": "/",
@@ -10,6 +10,6 @@
   "theme_color": "#0b4f86",
   "icons": [
     { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "/contaai-simbolo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+    { "src": "/quantotem-simbolo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
   ]
 }

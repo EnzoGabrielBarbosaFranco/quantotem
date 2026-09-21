@@ -1,4 +1,4 @@
-# Conta Aí
+# Quanto Tem
 
 Controle financeiro pessoal local-first: funciona no navegador e, quando publicado com o Worker incluído, pode sincronizar vários dispositivos por meio de um cofre criptografado.
 
@@ -48,7 +48,7 @@ npm run deploy
 O endereço criado pelo deploy serve o site e a API `/api/sync` no mesmo domínio. Isso evita manter API, banco e autenticação tradicionais. Para permitir que outro domínio já existente consuma essa API, configure `ALLOWED_ORIGINS` no Worker como uma lista separada por vírgulas e adicione no HTML desse site:
 
 ```html
-<meta name="contaai-sync-url" content="https://seu-worker.workers.dev/api/sync">
+<meta name="quanto-tem-sync-url" content="https://seu-worker.workers.dev/api/sync">
 ```
 
 ## Como o cofre protege os dados

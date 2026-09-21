@@ -66,7 +66,7 @@ async function connectDevTools(debugPort) {
   return { evaluate, exceptions, close: () => socket.close() };
 }
 async function openBrowser(appUrl) {
-  const profile = await mkdtemp(resolve(tmpdir(), "contaai-sync-browser-"));
+  const profile = await mkdtemp(resolve(tmpdir(), "quanto-tem-sync-browser-"));
   const debugPort = await availablePort();
   const browser = spawn(chromePath, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", `--user-data-dir=${profile}`, `--remote-debugging-port=${debugPort}`, appUrl], { stdio: "ignore", windowsHide: true });
   const devTools = await connectDevTools(debugPort);
@@ -123,7 +123,7 @@ try {
     const createObjectURL = URL.createObjectURL;
     const revokeObjectURL = URL.revokeObjectURL;
     const click = HTMLAnchorElement.prototype.click;
-    URL.createObjectURL = blob => { recoveryBlob = blob; return 'blob:contaai-recovery-test'; };
+    URL.createObjectURL = blob => { recoveryBlob = blob; return 'blob:quanto-tem-recovery-test'; };
     URL.revokeObjectURL = () => {};
     HTMLAnchorElement.prototype.click = () => {};
     document.querySelector('#downloadRecovery').click();
@@ -141,7 +141,7 @@ try {
     localStorage.clear();
     const input = document.querySelector('#restoreInput');
     const transfer = new DataTransfer();
-    transfer.items.add(new File([${JSON.stringify(recoveryText)}], 'recuperacao-contaai.json', { type: 'application/json' }));
+    transfer.items.add(new File([${JSON.stringify(recoveryText)}], 'recuperacao-quanto-tem.json', { type: 'application/json' }));
     input.files = transfer.files;
     input.dispatchEvent(new Event('change', { bubbles: true }));
     return true;

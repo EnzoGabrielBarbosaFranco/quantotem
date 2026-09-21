@@ -267,7 +267,7 @@
     }
   }
   function syncApiUrl(vaultId = "") {
-    const configured = document.querySelector('meta[name="contaai-sync-url"]')?.content || SYNC_API_PATH;
+    const configured = document.querySelector('meta[name="quanto-tem-sync-url"]')?.content || document.querySelector('meta[name="contaai-sync-url"]')?.content || SYNC_API_PATH;
     const base = new URL(configured, window.location.href).toString().replace(/\/$/, "");
     return vaultId ? `${base}/${vaultId}` : base;
   }
@@ -850,7 +850,7 @@
       categories: state.categories
     };
   }
-  function downloadRecoveryBackup(prefix = "backup-contaai") {
+  function downloadRecoveryBackup(prefix = "backup-quanto-tem") {
     download(JSON.stringify(recoveryBackup(), null, 2), `${prefix}-${toISO(new Date())}.json`, "application/json");
   }
   function exportCSV() {
@@ -1023,7 +1023,7 @@
     syncRuntime.keys = null;
     syncRuntime.error = "";
     renderSyncUI();
-    try { await performSync({ secret }); downloadRecoveryBackup("recuperacao-contaai"); toast("Cofre criado. Arquivo de recuperação baixado"); }
+    try { await performSync({ secret }); downloadRecoveryBackup("recuperacao-quanto-tem"); toast("Cofre criado. Arquivo de recuperação baixado"); }
     catch (error) { syncRuntime.secret = ""; syncRuntime.keys = null; syncRuntime.error = ""; storageRemove(SYNC_SECRET_KEY); renderSyncUI(); toast(error.message); }
   });
   document.querySelector("#connectVaultForm").addEventListener("submit", async event => {
@@ -1043,7 +1043,7 @@
     if (cursorAtEnd) event.currentTarget.setSelectionRange(event.currentTarget.value.length, event.currentTarget.value.length);
   });
   document.querySelector("#copyVaultCode").addEventListener("click", async () => { try { await copyText(formatVaultSecret(syncRuntime.secret)); toast("Código do cofre copiado"); } catch { toast("Não foi possível copiar o código"); } });
-  document.querySelector("#downloadRecovery").addEventListener("click", () => { downloadRecoveryBackup("recuperacao-contaai"); toast("Arquivo de recuperação baixado"); });
+  document.querySelector("#downloadRecovery").addEventListener("click", () => { downloadRecoveryBackup("recuperacao-quanto-tem"); toast("Arquivo de recuperação baixado"); });
   document.querySelector("#syncNow").addEventListener("click", async () => { try { await performSync(); toast("Dados sincronizados"); } catch (error) { toast(error.message); } });
   document.querySelector("#disconnectVault").addEventListener("click", () => {
     syncRuntime.secret = ""; syncRuntime.keys = null; syncRuntime.error = ""; syncRuntime.lastSynced = null; clearTimeout(syncRuntime.timer); storageRemove(SYNC_SECRET_KEY); renderSyncUI(); toast("Cofre desconectado deste navegador");

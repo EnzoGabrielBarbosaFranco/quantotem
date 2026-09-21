@@ -76,7 +76,7 @@ export default {
     const origin = allowedOrigin(request, env);
     if (!origin) return json({ error: "Origem não autorizada." }, 403);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...SYNC_HEADER, ...corsHeaders(origin) } });
-    if (url.pathname === "/api/sync") return json({ ok: true, service: "Conta Aí Sync" }, 200, corsHeaders(origin));
+    if (url.pathname === "/api/sync") return json({ ok: true, service: "Quanto Tem Sync" }, 200, corsHeaders(origin));
 
     const match = url.pathname.match(/^\/api\/sync\/([a-f0-9]{64})$/);
     if (!match) return json({ error: "Endereço de cofre inválido." }, 404, corsHeaders(origin));

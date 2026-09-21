@@ -127,7 +127,7 @@ const fillAndSubmit = (type, title, amount, date = "") => `(async () => {
 
 async function runBrowser(name, executable, appUrl) {
   const debugPort = await availablePort();
-  const profile = await mkdtemp(resolve(tmpdir(), "contaai-browser-test-"));
+  const profile = await mkdtemp(resolve(tmpdir(), "quanto-tem-browser-test-"));
   const browser = spawn(executable, [
     "--headless=new",
     "--disable-gpu",
@@ -230,17 +230,17 @@ async function runBrowser(name, executable, appUrl) {
       document.querySelector('#closeMenu').click();
       return result;
     })()`);
-    assert(mobileHeader.brandVisible && mobileHeader.brandText.includes("Conta") && mobileHeader.brandAbovePeriod, `${name}: a marca não ficou visível e organizada no cabeçalho mobile`);
+    assert(mobileHeader.brandVisible && mobileHeader.brandText.includes("Quanto") && mobileHeader.brandText.includes("Tem") && mobileHeader.brandAbovePeriod, `${name}: a marca não ficou visível e organizada no cabeçalho mobile`);
     assert(mobileHeader.sidebarFits && mobileHeader.syncSingleLine && mobileHeader.topStripeRemoved, `${name}: a barra lateral mobile, o botão de sincronização ou a remoção da faixa superior falhou`);
     if (process.argv.includes("--screenshots") && name === "Chrome") {
       await devTools.evaluate("new Promise(resolve => setTimeout(() => resolve(true), 300))");
       const mobileHeaderShot = await devTools.command("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
-      const mobileHeaderPath = resolve(tmpdir(), "contaai-mobile-header.png");
+      const mobileHeaderPath = resolve(tmpdir(), "quanto-tem-mobile-header.png");
       await writeFile(mobileHeaderPath, Buffer.from(mobileHeaderShot.data, "base64"));
       process.stdout.write(`Prévia: ${mobileHeaderPath}\n`);
       await devTools.evaluate("document.querySelector('#openMenu').click(); new Promise(resolve => setTimeout(() => resolve(true), 300))");
       const mobileShot = await devTools.command("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
-      const mobilePath = resolve(tmpdir(), "contaai-mobile-navigation.png");
+      const mobilePath = resolve(tmpdir(), "quanto-tem-mobile-navigation.png");
       await writeFile(mobilePath, Buffer.from(mobileShot.data, "base64"));
       process.stdout.write(`Prévia: ${mobilePath}\n`);
       await devTools.evaluate("document.querySelector('#closeMenu').click(); true");
@@ -250,7 +250,7 @@ async function runBrowser(name, executable, appUrl) {
     if (process.argv.includes("--screenshots") && name === "Chrome") {
       await devTools.evaluate("document.querySelector('#themeBtn').click(); document.querySelector('#prevPeriod').click(); new Promise(resolve => setTimeout(() => resolve(true), 350))");
       const dashboardShot = await devTools.command("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
-      const dashboardPath = resolve(tmpdir(), "contaai-dark-dashboard.png");
+      const dashboardPath = resolve(tmpdir(), "quanto-tem-dark-dashboard.png");
       await writeFile(dashboardPath, Buffer.from(dashboardShot.data, "base64"));
 
       await devTools.evaluate(`(async () => {
@@ -263,7 +263,7 @@ async function runBrowser(name, executable, appUrl) {
         return true;
       })()`);
       const modalShot = await devTools.command("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
-      const modalPath = resolve(tmpdir(), "contaai-dark-modal.png");
+      const modalPath = resolve(tmpdir(), "quanto-tem-dark-modal.png");
       await writeFile(modalPath, Buffer.from(modalShot.data, "base64"));
       process.stdout.write(`Prévia: ${dashboardPath}\nPrévia: ${modalPath}\n`);
       await devTools.evaluate("document.querySelector('#transactionModal .close-modal').click(); document.querySelector('#themeBtn').click(); true");
