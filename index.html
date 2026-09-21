@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
   <svg class="svg-sprite" aria-hidden="true">
@@ -184,14 +184,14 @@
       </div>
       <div id="syncConnected" class="sync-pane hidden">
         <div class="sync-status-card"><span class="sync-status-icon"><svg class="icon"><use href="#icon-cloud"></use></svg></span><div><strong id="syncStatusTitle">Cofre conectado</strong><p id="syncStatusText">Preparando a primeira sincronização…</p></div></div>
-        <label class="vault-code-label">Código do seu cofre<small>Guarde-o em local seguro. Ele dá acesso aos seus dados.</small></label>
+        <label class="vault-code-label">Código do seu cofre<small>Guarde-o em local seguro. Uma mudança no endereço do site cria um novo armazenamento no navegador.</small></label>
         <div class="vault-code"><code id="vaultCode"></code><button id="copyVaultCode" aria-label="Copiar código" title="Copiar código"><svg class="icon"><use href="#icon-copy"></use></svg></button></div>
-        <div class="sync-actions"><button class="primary-btn" id="syncNow">Sincronizar agora</button><button class="secondary-btn" id="disconnectVault">Desconectar</button></div>
+        <div class="sync-actions"><button class="secondary-btn recovery-action" id="downloadRecovery"><svg class="icon"><use href="#icon-download"></use></svg>Baixar arquivo de recuperação</button><button class="primary-btn" id="syncNow">Sincronizar agora</button><button class="secondary-btn" id="disconnectVault">Desconectar</button></div>
       </div>
     </div>
   </div>
 
   <div class="toast hidden" id="toast"></div>
-  <script src="script.js?v=3"></script>
+  <script src="script.js?v=4"></script>
 </body>
 </html>

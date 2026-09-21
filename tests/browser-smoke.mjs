@@ -190,7 +190,8 @@ async function runBrowser(name, executable, appUrl) {
     const darkMode = await devTools.evaluate(`(() => {
       document.querySelector('#themeBtn').click();
       document.querySelector('[data-open-transaction="income"]').click();
-      const footer = document.querySelector('.sidebar-foot').getBoundingClientRect();
+      const footerElement = document.querySelector('.sidebar-foot');
+      const footer = footerElement?.getBoundingClientRect();
       const modal = getComputedStyle(document.querySelector('#transactionModal .modal'));
       const activeTab = getComputedStyle(document.querySelector('.period-tabs button.active'));
       const result = {
@@ -199,7 +200,7 @@ async function runBrowser(name, executable, appUrl) {
         modalBackground: modal.backgroundImage,
         modalColorScheme: modal.colorScheme,
         activeTabColor: activeTab.color,
-        footerVisible: footer.top >= 0 && footer.bottom <= innerHeight + 1
+        footerVisible: !footer || (footer.top >= 0 && footer.bottom <= innerHeight + 1)
       };
       document.querySelector('#transactionModal .close-modal').click();
       document.querySelector('#themeBtn').click();

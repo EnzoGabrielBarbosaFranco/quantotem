@@ -473,7 +473,7 @@
       .filter(item => state.typeFilter === "all" || item.type === state.typeFilter)
       .filter(item => state.categoryFilter === "all" || item.category === state.categoryFilter)
       .filter(item => !search || `${item.title} ${item.category} ${item.account}`.toLocaleLowerCase("pt-BR").includes(search))
-      .sort((a, b) => b.date.localeCompare(a.date));
+      .sort((a, b) => b.date.localeCompare(a.date) || Number(b.updatedAt) - Number(a.updatedAt) || b.id.localeCompare(a.id));
   }
   function revealTransaction(item) {
     const itemDate = parseDate(item.date);
@@ -838,6 +838,21 @@
   function download(content, filename, type) {
     const url = URL.createObjectURL(new Blob([content], { type })); const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
   }
+  function recoveryBackup() {
+    return {
+      version: 4,
+      exportedAt: new Date().toISOString(),
+      sourceOrigin: window.location.origin,
+      vaultCode: syncRuntime.secret ? formatVaultSecret(syncRuntime.secret) : null,
+      transactions: state.transactions,
+      goals: state.goals,
+      budgets: state.budgets,
+      categories: state.categories
+    };
+  }
+  function downloadRecoveryBackup(prefix = "backup-contaai") {
+    download(JSON.stringify(recoveryBackup(), null, 2), `${prefix}-${toISO(new Date())}.json`, "application/json");
+  }
   function exportCSV() {
     const rows = [["Data", "Tipo", "Descrição", "Categoria", "Conta", "Valor"], ...state.transactions.filter(isPostedTransaction).map(item => [item.date, item.type === "income" ? "Entrada" : "Despesa", item.title, item.category, item.account, Number(item.amount).toFixed(2)])];
     const csv = rows.map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(";")).join("\n");
@@ -1008,7 +1023,7 @@
     syncRuntime.keys = null;
     syncRuntime.error = "";
     renderSyncUI();
-    try { await performSync({ secret }); toast("Cofre criado e sincronização ativada"); }
+    try { await performSync({ secret }); downloadRecoveryBackup("recuperacao-contaai"); toast("Cofre criado. Arquivo de recuperação baixado"); }
     catch (error) { syncRuntime.secret = ""; syncRuntime.keys = null; syncRuntime.error = ""; storageRemove(SYNC_SECRET_KEY); renderSyncUI(); toast(error.message); }
   });
   document.querySelector("#connectVaultForm").addEventListener("submit", async event => {
@@ -1028,16 +1043,17 @@
     if (cursorAtEnd) event.currentTarget.setSelectionRange(event.currentTarget.value.length, event.currentTarget.value.length);
   });
   document.querySelector("#copyVaultCode").addEventListener("click", async () => { try { await copyText(formatVaultSecret(syncRuntime.secret)); toast("Código do cofre copiado"); } catch { toast("Não foi possível copiar o código"); } });
+  document.querySelector("#downloadRecovery").addEventListener("click", () => { downloadRecoveryBackup("recuperacao-contaai"); toast("Arquivo de recuperação baixado"); });
   document.querySelector("#syncNow").addEventListener("click", async () => { try { await performSync(); toast("Dados sincronizados"); } catch (error) { toast(error.message); } });
   document.querySelector("#disconnectVault").addEventListener("click", () => {
     syncRuntime.secret = ""; syncRuntime.keys = null; syncRuntime.error = ""; syncRuntime.lastSynced = null; clearTimeout(syncRuntime.timer); storageRemove(SYNC_SECRET_KEY); renderSyncUI(); toast("Cofre desconectado deste navegador");
   });
   document.querySelectorAll(".modal-backdrop").forEach(modal => modal.addEventListener("mousedown", event => { if (event.target === modal) closeModals(); }));
   document.addEventListener("keydown", event => { if (event.key === "Escape") closeModals(); });
-  document.querySelector("#backupBtn").addEventListener("click", () => { download(JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), transactions: state.transactions, goals: state.goals, budgets: state.budgets, categories: state.categories }, null, 2), `backup-contaai-${toISO(new Date())}.json`, "application/json"); toast("Backup criado com sucesso"); });
+  document.querySelector("#backupBtn").addEventListener("click", () => { downloadRecoveryBackup(); toast(syncRuntime.secret ? "Backup com recuperação do cofre criado" : "Backup criado com sucesso"); });
   document.querySelector("#restoreBtn").addEventListener("click", () => document.querySelector("#restoreInput").click());
   document.querySelector("#restoreInput").addEventListener("change", event => {
-    const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { try { const data = JSON.parse(reader.result); if (!Array.isArray(data.transactions)) throw new Error(); ["transactions", "goals", "budgets", "categories"].forEach(collection => state[collection].forEach(item => recordDeletion(collection, item.id))); state.transactions = data.transactions.map(item => ({ ...item, id: typeof item.id === "string" && item.id ? item.id : uid(), updatedAt: nextTimestamp() })); state.goals = Array.isArray(data.goals) ? data.goals.map((goal, index) => ({ ...goal, id: typeof goal.id === "string" && goal.id ? goal.id : uid(), color: safeColor(goal.color, goalColors[index % goalColors.length]), updatedAt: nextTimestamp() })) : []; state.budgets = Array.isArray(data.budgets) ? data.budgets.map(budget => ({ ...budget, id: typeof budget.id === "string" && budget.id ? budget.id : uid(), updatedAt: nextTimestamp() })) : []; if (Array.isArray(data.categories)) { state.categories = data.categories.map((category, index) => ({ ...category, id: typeof category.id === "string" && category.id ? category.id : uid(), color: colors[category.name] || safeColor(category.color, customColors[index % customColors.length]), updatedAt: nextTimestamp() })); state.categories.forEach(category => { colors[category.name] = category.color || colors.Outros; }); } save(); render(); toast("Dados restaurados com sucesso"); } catch { toast("Arquivo de backup inválido"); } }; reader.readAsText(file); event.target.value = "";
+    const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = async () => { try { const data = JSON.parse(reader.result); if (!Array.isArray(data.transactions)) throw new Error(); const restoredSecret = normalizeVaultSecret(data.vaultCode || ""); ["transactions", "goals", "budgets", "categories"].forEach(collection => state[collection].forEach(item => recordDeletion(collection, item.id))); state.transactions = data.transactions.map(item => ({ ...item, id: typeof item.id === "string" && item.id ? item.id : uid(), updatedAt: nextTimestamp() })); state.goals = Array.isArray(data.goals) ? data.goals.map((goal, index) => ({ ...goal, id: typeof goal.id === "string" && goal.id ? goal.id : uid(), color: safeColor(goal.color, goalColors[index % goalColors.length]), updatedAt: nextTimestamp() })) : []; state.budgets = Array.isArray(data.budgets) ? data.budgets.map(budget => ({ ...budget, id: typeof budget.id === "string" && budget.id ? budget.id : uid(), updatedAt: nextTimestamp() })) : []; if (Array.isArray(data.categories)) { state.categories = data.categories.map((category, index) => ({ ...category, id: typeof category.id === "string" && category.id ? category.id : uid(), color: colors[category.name] || safeColor(category.color, customColors[index % customColors.length]), updatedAt: nextTimestamp() })); state.categories.forEach(category => { colors[category.name] = category.color || colors.Outros; }); } save(); render(); if (!restoredSecret) { toast("Dados restaurados com sucesso"); return; } syncRuntime.secret = restoredSecret; syncRuntime.keys = null; syncRuntime.error = ""; storageSet(SYNC_SECRET_KEY, restoredSecret); renderSyncUI(); try { await performSync({ secret: restoredSecret }); toast("Dados restaurados e cofre reconectado"); } catch { toast("Dados restaurados. Abra a sincronização para tentar conectar novamente"); } } catch { toast("Arquivo de backup inválido"); } }; reader.readAsText(file); event.target.value = "";
   });
   let scrollSaveTimer;
   window.addEventListener("scroll", () => { clearTimeout(scrollSaveTimer); scrollSaveTimer = setTimeout(() => saveUI(), 120); }, { passive: true });

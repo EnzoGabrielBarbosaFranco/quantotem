@@ -976,6 +976,7 @@ body.dark .period-control > .today-button:hover { border-color: #19e4b3; backgro
 .vault-code button { width: 35px; height: 35px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); color: var(--ink); }
 .sync-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .sync-actions button { justify-content: center; }
+.sync-actions .recovery-action { grid-column: 1 / -1; }
 
 body.dark .budget-summary > div,
 body.dark .budget-card { background: linear-gradient(145deg, #113149, #0d293e); border-color: #27516a; }

@@ -118,13 +118,32 @@ try {
   })()`);
   await retry(async () => { if (!await first.devTools.evaluate("document.querySelector('#syncDot').classList.contains('connected')")) throw new Error("Primeiro navegador ainda sincronizando"); });
 
+  const recoveryText = await first.devTools.evaluate(`(async () => {
+    let recoveryBlob;
+    const createObjectURL = URL.createObjectURL;
+    const revokeObjectURL = URL.revokeObjectURL;
+    const click = HTMLAnchorElement.prototype.click;
+    URL.createObjectURL = blob => { recoveryBlob = blob; return 'blob:contaai-recovery-test'; };
+    URL.revokeObjectURL = () => {};
+    HTMLAnchorElement.prototype.click = () => {};
+    document.querySelector('#downloadRecovery').click();
+    const content = await recoveryBlob.text();
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL;
+    HTMLAnchorElement.prototype.click = click;
+    return content;
+  })()`);
+  const recovery = JSON.parse(recoveryText);
+  assert(recovery.vaultCode?.replace(/-/g, "") === secret && recovery.transactions.some(item => item.title === "Compartilhado entre navegadores"), "O arquivo de recuperação não preservou o cofre e os dados");
+
   second = await openBrowser(appUrl);
   await second.devTools.evaluate(`(() => {
     localStorage.clear();
-    document.querySelector('#openSync').click();
-    const form = document.querySelector('#connectVaultForm');
-    form.elements.secret.value = '${secret}';
-    form.requestSubmit();
+    const input = document.querySelector('#restoreInput');
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([${JSON.stringify(recoveryText)}], 'recuperacao-contaai.json', { type: 'application/json' }));
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
   })()`);
   await retry(async () => {
