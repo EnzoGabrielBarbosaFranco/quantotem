@@ -13,7 +13,7 @@ function allowedOrigin(request, env) {
   if (!origin) return "*";
   const ownOrigin = new URL(request.url).origin;
   const configured = String(env.ALLOWED_ORIGINS || "").split(",").map(value => value.trim()).filter(Boolean);
-  return origin === ownOrigin || configured.includes(origin) ? origin : "";
+  return origin === ownOrigin || configured.includes("*") || configured.includes(origin) ? origin : "";
 }
 
 function corsHeaders(origin) {
@@ -21,6 +21,7 @@ function corsHeaders(origin) {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, X-Contaai-Key",
+    "Access-Control-Expose-Headers": "X-Contaai-Sync",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin"
   };

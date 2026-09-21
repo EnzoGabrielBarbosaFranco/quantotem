@@ -78,15 +78,21 @@ async function closeBrowser(target) {
   if (target?.profile) await retry(() => rm(target.profile, { recursive: true, force: true }), 5000).catch(() => {});
 }
 
-await import("../scripts/prepare-assets.mjs");
-const workerPort = await availablePort();
-const wranglerBin = resolve(projectRoot, "node_modules", "wrangler", "bin", "wrangler.js");
-const worker = spawn(process.execPath, [wranglerBin, "dev", "--port", String(workerPort)], { cwd: projectRoot, stdio: "ignore", windowsHide: true });
+const externalAppUrl = process.env.CONTA_AI_APP_URL || process.argv.find(argument => argument.startsWith("--url="))?.slice(6);
+let worker = null;
+let appUrl;
+if (externalAppUrl) appUrl = `${externalAppUrl.replace(/\/$/, "")}/`;
+else {
+  await import("../scripts/prepare-assets.mjs");
+  const workerPort = await availablePort();
+  const wranglerBin = resolve(projectRoot, "node_modules", "wrangler", "bin", "wrangler.js");
+  worker = spawn(process.execPath, [wranglerBin, "dev", "--port", String(workerPort)], { cwd: projectRoot, stdio: "ignore", windowsHide: true });
+  appUrl = `http://127.0.0.1:${workerPort}/`;
+}
 let first;
 let second;
 
 try {
-  const appUrl = `http://127.0.0.1:${workerPort}/`;
   await retry(async () => { const response = await fetch(`${appUrl}api/sync`); if (!response.ok || response.headers.get("x-contaai-sync") !== "1") throw new Error("Worker ainda não iniciou"); }, 30000);
   first = await openBrowser(appUrl);
   await first.devTools.evaluate("localStorage.clear(); location.reload(); true").catch(() => {});
@@ -145,7 +151,9 @@ try {
 } finally {
   await closeBrowser(second);
   await closeBrowser(first);
-  await stopProcess(worker);
-  await retry(() => rm(resolve(projectRoot, ".wrangler"), { recursive: true, force: true }), 8000).catch(() => {});
-  await retry(() => rm(resolve(projectRoot, ".dist"), { recursive: true, force: true }), 8000).catch(() => {});
+  if (worker) {
+    await stopProcess(worker);
+    await retry(() => rm(resolve(projectRoot, ".wrangler"), { recursive: true, force: true }), 8000).catch(() => {});
+    await retry(() => rm(resolve(projectRoot, ".dist"), { recursive: true, force: true }), 8000).catch(() => {});
+  }
 }

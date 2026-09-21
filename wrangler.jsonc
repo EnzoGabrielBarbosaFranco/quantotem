@@ -3,6 +3,9 @@
   "name": "contaai",
   "main": "./cloud/sync-worker.js",
   "compatibility_date": "2026-09-10",
+  "vars": {
+    "ALLOWED_ORIGINS": "*"
+  },
   "assets": {
     "directory": ".dist",
     "binding": "ASSETS",
