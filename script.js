@@ -1,3 +1,5 @@
+import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createReportPDF } from "./reports.js?v=2";
+
 (() => {
   "use strict";
 
@@ -466,21 +468,31 @@
     return date.getFullYear() === anchor.getFullYear();
   }
   function isPostedTransaction(item) { return !item.recurring || item.paid; }
-  function filteredTransactions() {
-    const search = state.search.toLocaleLowerCase("pt-BR");
+  function transactionDate(item) {
+    return item.recurring && item.paid && /^\d{4}-\d{2}-\d{2}$/.test(item.paidDate || "") ? item.paidDate : item.date;
+  }
+  function periodTransactions() {
     return state.transactions.filter(isPostedTransaction)
-      .filter(item => inPeriod(parseDate(item.date), state.period, state.anchor))
+      .filter(item => inPeriod(parseDate(transactionDate(item)), state.period, state.anchor))
+      .sort((a, b) => transactionDate(b).localeCompare(transactionDate(a)) || Number(b.updatedAt) - Number(a.updatedAt) || b.id.localeCompare(a.id));
+  }
+  function matchesSearch(item) {
+    const search = state.search.toLocaleLowerCase("pt-BR");
+    return !search || `${item.title} ${item.category} ${item.account}`.toLocaleLowerCase("pt-BR").includes(search);
+  }
+  function filteredTransactions(items = periodTransactions()) {
+    return items
       .filter(item => state.typeFilter === "all" || item.type === state.typeFilter)
       .filter(item => state.categoryFilter === "all" || item.category === state.categoryFilter)
-      .filter(item => !search || `${item.title} ${item.category} ${item.account}`.toLocaleLowerCase("pt-BR").includes(search))
-      .sort((a, b) => b.date.localeCompare(a.date) || Number(b.updatedAt) - Number(a.updatedAt) || b.id.localeCompare(a.id));
+      .filter(matchesSearch);
   }
   function revealTransaction(item) {
-    const itemDate = parseDate(item.date);
+    const date = transactionDate(item);
+    const itemDate = parseDate(date);
     if (!inPeriod(itemDate, state.period, state.anchor)) {
       if (state.period === "range") {
-        if (item.date < state.rangeStart) state.rangeStart = item.date;
-        if (item.date > state.rangeEnd) state.rangeEnd = item.date;
+        if (date < state.rangeStart) state.rangeStart = date;
+        if (date > state.rangeEnd) state.rangeEnd = date;
       } else state.anchor = itemDate;
     }
 
@@ -502,16 +514,18 @@
   }
 
   function render() {
-    const items = filteredTransactions();
-    const total = totals(items);
     renderPeriodLabel();
     renderTabs();
     renderCategoryFilters();
-    renderSummary(total, items);
+    const periodItems = periodTransactions();
+    const items = filteredTransactions(periodItems);
+    const total = totals(periodItems);
+    renderSummary(total, periodItems, "#dashboardView .summary-slot");
+    renderSummary(totals(items), items, "#transactionsView .summary-slot");
     renderMonthlyChart();
-    renderCategoryChart(groups(items), total.expenses);
-    renderTransactions(items);
-    renderInsights(groups(items), total);
+    renderCategoryChart(groups(periodItems), total.expenses);
+    renderTransactions(items, periodItems.filter(matchesSearch));
+    renderInsights(groups(periodItems), total, periodItems.length);
     renderRecurring();
     renderBudgets();
     renderGoals();
@@ -549,7 +563,7 @@
     if (categoryFilter.value === "all") state.categoryFilter = "all";
     typeFilter.value = state.typeFilter;
   }
-  function renderSummary(total, items) {
+  function renderSummary(total, items, selector) {
     const incomeCount = items.filter(item => item.type === "income").length;
     const expenseCount = items.filter(item => item.type === "expense").length;
     const cards = [
@@ -559,16 +573,13 @@
       ["Taxa de economia", total.income ? total.savings : null, "savings", total.income ? "Percentual da renda preservado" : "Disponível após registrar renda"]
     ];
     const html = cards.map(([label, value, tone, detail]) => `<article class="summary-card ${tone}"><div class="summary-icon">${icons[tone]}</div><div class="summary-copy"><span>${label}</span><strong>${tone === "savings" ? (value === null ? "—" : `${value}%`) : money.format(value)}</strong><small>${detail}</small></div></article>`).join("");
-    document.querySelectorAll(".summary-slot").forEach(slot => slot.innerHTML = html);
+    document.querySelector(selector).innerHTML = html;
   }
   function renderMonthlyChart() {
-    const chartItems = state.transactions
-      .filter(isPostedTransaction)
-      .filter(item => state.typeFilter === "all" || item.type === state.typeFilter)
-      .filter(item => state.categoryFilter === "all" || item.category === state.categoryFilter);
+    const chartItems = state.transactions.filter(isPostedTransaction);
     const months = Array.from({ length: 6 }, (_, index) => {
       const date = new Date(state.anchor.getFullYear(), state.anchor.getMonth() - 5 + index, 1);
-      const monthItems = chartItems.filter(item => item.date.startsWith(monthKey(date)));
+      const monthItems = chartItems.filter(item => transactionDate(item).startsWith(monthKey(date)));
       const total = totals(monthItems);
       return { label: date.toLocaleDateString("pt-BR", { month: "short" }).replace(".", ""), income: total.income, expense: total.expenses };
     });
@@ -603,16 +614,16 @@
   function transactionRow(item) {
     const sign = item.type === "income" ? "+" : "−";
     const id = escapeHTML(item.id);
-    return `<div class="transaction-row"><div class="transaction-symbol" style="background:${colors[item.category] || colors.Outros}18;color:${colors[item.category] || colors.Outros}">${icon(item.type === "income" ? "arrow-up-right" : "arrow-down-right")}</div><div class="transaction-main"><strong>${escapeHTML(item.title)}</strong><span>${escapeHTML(item.category)} · ${escapeHTML(item.account)}</span></div><time>${parseDate(item.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</time><span class="transaction-category">${escapeHTML(item.category)}</span><strong class="amount ${item.type === "income" ? "income-text" : "expense-text"}">${sign}${money.format(item.amount)}</strong><div class="transaction-actions"><button class="edit-button" data-edit="${id}" aria-label="Editar lançamento" title="Editar lançamento">${icon("edit")}</button><button class="delete-button" data-delete="${id}" aria-label="Excluir lançamento" title="Excluir lançamento">${icon("trash")}</button></div></div>`;
+    return `<div class="transaction-row"><div class="transaction-symbol" style="background:${colors[item.category] || colors.Outros}18;color:${colors[item.category] || colors.Outros}">${icon(item.type === "income" ? "arrow-up-right" : "arrow-down-right")}</div><div class="transaction-main"><strong>${escapeHTML(item.title)}</strong><span>${escapeHTML(item.category)} · ${escapeHTML(item.account)}</span></div><time>${parseDate(transactionDate(item)).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</time><span class="transaction-category">${escapeHTML(item.category)}</span><strong class="amount ${item.type === "income" ? "income-text" : "expense-text"}">${sign}${money.format(item.amount)}</strong><div class="transaction-actions"><button class="edit-button" data-edit="${id}" aria-label="Editar lançamento" title="Editar lançamento">${icon("edit")}</button><button class="delete-button" data-delete="${id}" aria-label="Excluir lançamento" title="Excluir lançamento">${icon("trash")}</button></div></div>`;
   }
-  function renderTransactions(items) {
+  function renderTransactions(items, recentItems) {
     const hasPendingFixedExpense = state.transactions.some(item => item.recurring && !item.paid);
     const emptyDetail = hasPendingFixedExpense && !state.transactions.some(isPostedTransaction) ? "Os gastos fixos pendentes aparecerão aqui depois que forem marcados como pagos." : state.transactions.length ? "Existem lançamentos salvos fora do período ou dos filtros selecionados." : "Registre uma entrada ou despesa para começar.";
-    document.querySelector("#recentTransactions").innerHTML = items.length ? items.slice(0, 6).map(transactionRow).join("") : empty("Nenhum lançamento neste período.", emptyDetail);
+    document.querySelector("#recentTransactions").innerHTML = recentItems.length ? recentItems.slice(0, 6).map(transactionRow).join("") : empty("Nenhum lançamento neste período.", emptyDetail);
     document.querySelector("#transactionCount").textContent = `${items.length} ${items.length === 1 ? "lançamento" : "lançamentos"}`;
     document.querySelector("#allTransactions").innerHTML = items.length ? `<div class="table-head"><span>Lançamento</span><span>Data</span><span>Categoria</span><span>Valor</span><span></span></div>${items.map(transactionRow).join("")}` : empty("Nenhum lançamento neste período.", emptyDetail);
   }
-  function renderInsights(categoryGroups, total) {
+  function renderInsights(categoryGroups, total, transactionCount) {
     const top = categoryGroups[0];
     const target = document.querySelector("#insightsPanel");
     if (!total.income && !total.expenses) {
@@ -621,7 +632,6 @@
     }
     const balance = total.balance;
     const expenseShare = total.income ? Math.round(total.expenses / total.income * 100) : null;
-    const transactionCount = filteredTransactions().length;
     target.innerHTML = `<div class="insights-title"><span>${icon("chart")}</span><div><small>RESUMO DO PERÍODO</small><h2>Leitura dos seus números</h2></div></div><div class="insight-highlight"><span>Resultado do período</span><strong class="${balance < 0 ? "negative" : ""}">${money.format(balance)}</strong><small>Entradas menos despesas</small></div><div class="insight-list"><div><span class="insight-number">01</span><p><strong>${top ? `Maior gasto: ${escapeHTML(top[0])}` : "Nenhuma despesa"}</strong>${top ? `${money.format(top[1])}, equivalente a ${Math.round(top[1] / total.expenses * 100)}% das despesas.` : "Não houve saídas registradas neste período."}</p></div><div><span class="insight-number">02</span><p><strong>${expenseShare === null ? "Sem renda registrada" : `${expenseShare}% da renda foi utilizada`}</strong>${expenseShare === null ? "Adicione suas entradas para comparar renda e despesas." : `${money.format(total.expenses)} em despesas sobre ${money.format(total.income)} em entradas.`}</p></div><div><span class="insight-number">03</span><p><strong>${transactionCount} ${transactionCount === 1 ? "movimentação" : "movimentações"}</strong>Total considerado no filtro e período selecionados.</p></div></div><button data-scroll-categories>Ver categorias ${icon("arrow-right")}</button>`;
   }
   function renderRecurring() {
@@ -635,7 +645,7 @@
   function renderBudgets() {
     const month = monthKey(state.anchor);
     const monthLabel = state.anchor.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
-    const monthExpenses = state.transactions.filter(item => isPostedTransaction(item) && item.type === "expense" && item.date.startsWith(month));
+    const monthExpenses = state.transactions.filter(item => isPostedTransaction(item) && item.type === "expense" && transactionDate(item).startsWith(month));
     const spentByCategory = new Map(groups(monthExpenses));
     const planned = state.budgets.reduce((sum, budget) => sum + budget.limit, 0);
     const spent = state.budgets.reduce((sum, budget) => sum + (spentByCategory.get(budget.category) || 0), 0);
@@ -698,7 +708,7 @@
     form.elements.title.value = transaction.title;
     form.elements.amount.value = formatMoneyValue(String(transaction.amount).replace(".", ","), true);
     form.elements.amount.dataset.moneyFormatted = form.elements.amount.value;
-    form.elements.date.value = transaction.date;
+    form.elements.date.value = transactionDate(transaction);
     form.elements.account.value = transaction.account;
     form.elements.note.value = transaction.note || "";
     form.elements.recurring.checked = Boolean(transaction.recurring);
@@ -836,7 +846,10 @@
     button.querySelector("use").setAttribute("href", isDark ? "#icon-sun" : "#icon-moon");
   }
   function download(content, filename, type) {
-    const url = URL.createObjectURL(new Blob([content], { type })); const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
+    const url = URL.createObjectURL(new Blob([content], { type }));
+    const link = document.createElement("a"); link.href = url; link.download = filename;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   function recoveryBackup() {
     return {
@@ -853,10 +866,58 @@
   function downloadRecoveryBackup(prefix = "backup-quanto-tem") {
     download(JSON.stringify(recoveryBackup(), null, 2), `${prefix}-${toISO(new Date())}.json`, "application/json");
   }
-  function exportCSV() {
-    const rows = [["Data", "Tipo", "Descrição", "Categoria", "Conta", "Valor"], ...state.transactions.filter(isPostedTransaction).map(item => [item.date, item.type === "income" ? "Entrada" : "Despesa", item.title, item.category, item.account, Number(item.amount).toFixed(2)])];
-    const csv = rows.map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(";")).join("\n");
-    download("\ufeff" + csv, `meu-dinheiro-${toISO(new Date())}.csv`, "text/csv;charset=utf-8"); toast("Planilha exportada");
+  function exportCSV(items = filteredTransactions()) {
+    if (!items.length) { toast("Nenhum lançamento para exportar. Ajuste o período ou os filtros."); return; }
+    download(csvBytes(items), `quanto-tem-lancamentos-${toISO(new Date())}.csv`, "text/csv;charset=utf-8");
+    toast(`${items.length} ${items.length === 1 ? "lançamento exportado" : "lançamentos exportados"} em CSV`);
+  }
+  let exportingPDF = false;
+  function openPDFExport() {
+    const form = document.querySelector("#exportForm"); form.reset();
+    form.elements.period.value = state.period;
+    form.elements.type.value = state.typeFilter;
+    form.elements.date.value = toISO(state.anchor);
+    form.elements.month.value = monthKey(state.anchor);
+    form.elements.year.value = state.anchor.getFullYear();
+    form.elements.start.value = state.rangeStart; form.elements.end.value = state.rangeEnd;
+    const categories = [...new Set([...state.categories.map(item => item.name), ...state.transactions.map(item => item.category)])].sort((a, b) => a.localeCompare(b, "pt-BR"));
+    document.querySelector("#exportCategories").innerHTML = categories.map(category => `<label><input type="checkbox" name="categories" value="${escapeHTML(category)}" ${state.categoryFilter === "all" || state.categoryFilter === category ? "checked" : ""}><span>${escapeHTML(category)}</span></label>`).join("");
+    updateExportPreview();
+    document.querySelector("#exportModal").classList.remove("hidden");
+    form.elements.period.focus();
+  }
+  function exportSelection() {
+    const form = document.querySelector("#exportForm"); const data = new FormData(form);
+    const bounds = reportBounds(Object.fromEntries(data));
+    const categories = data.getAll("categories");
+    if (!categories.length) throw new Error("Selecione ao menos uma categoria.");
+    const allCategories = categories.length === form.querySelectorAll('[name="categories"]').length;
+    const items = selectReportTransactions(state.transactions, { ...bounds, categories: allCategories ? null : categories, type: data.get("type"), includePending: data.get("includePending") === "on" });
+    const categoryLabel = allCategories ? "Todas as categorias" : categories.length <= 3 ? categories.join(", ") : `${categories.length} categorias selecionadas`;
+    const typeLabel = { all: "Entradas e despesas", income: "Somente entradas", expense: "Somente despesas" }[data.get("type")];
+    return { items, periodLabel: bounds.label, categoryLabel, typeLabel };
+  }
+  function updateExportPreview() {
+    const form = document.querySelector("#exportForm"); const period = form.elements.period.value;
+    [["exportDateField", ["day", "week"], ["date"]], ["exportMonthField", ["month"], ["month"]], ["exportYearField", ["year"], ["year"]], ["exportRangeField", ["range"], ["start", "end"]]].forEach(([id, periods, fields]) => {
+      const active = periods.includes(period);
+      document.querySelector(`#${id}`).classList.toggle("hidden", !active);
+      fields.forEach(name => { form.elements[name].required = active; });
+    });
+    document.querySelector("#exportDateLabel").textContent = period === "week" ? "Dia da semana desejada" : "Data do relatório";
+    document.querySelector("#exportDateHint").classList.toggle("hidden", period !== "week");
+    const checkboxes = [...form.querySelectorAll('[name="categories"]')];
+    const selected = checkboxes.filter(input => input.checked).length;
+    const all = document.querySelector("#exportAllCategories");
+    all.checked = selected > 0 && selected === checkboxes.length; all.indeterminate = selected > 0 && selected < checkboxes.length;
+    document.querySelector("#exportError").classList.add("hidden");
+    let hasItems = false;
+    try {
+      const report = exportSelection(); const total = reportTotals(report.items); hasItems = report.items.length > 0;
+      document.querySelector("#exportPreview").innerHTML = hasItems ? `<strong>${report.items.length} ${report.items.length === 1 ? "lançamento" : "lançamentos"} · ${escapeHTML(report.periodLabel)}</strong><div><span>Entradas <b>${money.format(total.income)}</b></span><span>Despesas pagas <b>${money.format(total.expenses)}</b></span><span>Saldo <b>${money.format(total.balance)}</b></span></div>${total.pending ? `<small>Pendentes: ${money.format(total.pending)}. Não entram no saldo.</small>` : ""}` : "Nenhum lançamento encontrado. Ajuste o período, o tipo ou as categorias.";
+    } catch (error) { document.querySelector("#exportPreview").textContent = error.message; }
+    document.querySelector("#exportPDFSubmit").disabled = exportingPDF || !hasItems;
+    document.querySelector("#exportModalCSV").disabled = exportingPDF || !hasItems;
   }
 
   document.addEventListener("click", event => {
@@ -876,13 +937,51 @@
     if (button.dataset.deleteBudget) { recordDeletion("budgets", button.dataset.deleteBudget); state.budgets = state.budgets.filter(budget => budget.id !== button.dataset.deleteBudget); save(); render(); toast("Orçamento excluído"); }
     if (button.matches(".close-modal")) closeModals();
     if (button.matches(".export-btn")) exportCSV();
+    if (button.id === "openPDFExport") openPDFExport();
+    if (button.id === "exportModalCSV") {
+      try { exportCSV(exportSelection().items); } catch (error) { toast(error.message); }
+    }
     if (button.hasAttribute("data-scroll-categories")) document.querySelector(".category-chart").scrollIntoView({ behavior: "smooth" });
+  });
+  document.querySelector("#exportForm").addEventListener("change", event => {
+    if (event.target.id === "exportAllCategories") document.querySelectorAll('#exportCategories input').forEach(input => { input.checked = event.target.checked; });
+    updateExportPreview();
+  });
+  document.querySelector("#exportForm").addEventListener("input", event => { if (!event.target.matches('[type="checkbox"]')) updateExportPreview(); });
+  document.querySelector("#exportForm").addEventListener("submit", async event => {
+    event.preventDefault(); if (exportingPDF) return;
+    const button = document.querySelector("#exportPDFSubmit");
+    try {
+      const report = exportSelection();
+      if (!report.items.length) throw new Error("Nenhum lançamento encontrado para exportar.");
+      exportingPDF = true; updateExportPreview(); button.textContent = "Gerando PDF…";
+      const pdf = await createReportPDF(report);
+      download(pdf, `quanto-tem-relatorio-${toISO(new Date())}.pdf`, "application/pdf");
+      toast("PDF gerado e baixado com sucesso");
+    } catch (error) {
+      const alert = document.querySelector("#exportError"); alert.textContent = error.message; alert.classList.remove("hidden");
+    } finally {
+      exportingPDF = false; button.textContent = "Baixar PDF";
+      const alert = document.querySelector("#exportError"); const failed = !alert.classList.contains("hidden"); const message = alert.textContent;
+      updateExportPreview();
+      if (failed) { alert.textContent = message; alert.classList.remove("hidden"); }
+    }
   });
   document.addEventListener("change", event => {
     if (event.target.matches("[data-toggle-paid]")) {
+      const index = state.transactions.findIndex(item => item.id === event.target.dataset.togglePaid && item.recurring && item.type === "expense");
+      if (index < 0) return;
       const paid = event.target.checked;
-      state.transactions = state.transactions.map(item => item.id === event.target.dataset.togglePaid ? { ...item, paid, updatedAt: nextTimestamp() } : item);
-      save(); render(); toast(paid ? "Pagamento confirmado e incluído no saldo" : "Pagamento desmarcado e removido do saldo");
+      const item = state.transactions[index];
+      const paidDate = paid ? (item.paid ? transactionDate(item) : toISO(new Date())) : null;
+      const transaction = { ...item, paid, paidDate, updatedAt: nextTimestamp() };
+      state.transactions[index] = transaction;
+      if (paid) revealTransaction(transaction);
+      const persisted = save();
+      saveUI();
+      render();
+      const message = paid ? "Pagamento confirmado e incluído no saldo" : "Pagamento desmarcado e removido do saldo";
+      toast(persisted ? message : "Pagamento atualizado nesta sessão. O navegador bloqueou o armazenamento local.");
     }
     if (event.target.id === "transactionTypeSelect") setTransactionType(event.target.value, document.querySelector("#categorySelect").value);
     if (event.target.matches("#transactionForm [name='recurring']")) syncRecurringFields();
@@ -915,6 +1014,9 @@
     if (editingId && editingIndex < 0) { closeModals(); toast("Não foi possível encontrar este lançamento"); return; }
     const previous = editingIndex >= 0 ? state.transactions[editingIndex] : {};
     const transaction = { ...previous, id: editingId || uid(), title: String(data.get("title") || "").trim(), amount, type, category: data.get("category"), date: data.get("date"), account: String(data.get("account") || "").trim(), note: String(data.get("note") || "").trim(), recurring, paid, updatedAt: nextTimestamp() };
+    // A data exibida na edição de um gasto pago é a data do pagamento.
+    if (recurring && previous.recurring && previous.paidDate) transaction.date = previous.date;
+    transaction.paidDate = recurring && paid ? data.get("date") : null;
     if (editingIndex >= 0) state.transactions[editingIndex] = transaction;
     else state.transactions.unshift(transaction);
     if (isPostedTransaction(transaction)) revealTransaction(transaction);

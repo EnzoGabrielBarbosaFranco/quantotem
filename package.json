@@ -4,23 +4,28 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "prepare:assets": "node scripts/prepare-assets.mjs",
     "predev": "npm run prepare:assets",
     "predeploy": "npm run prepare:assets",
-    "test": "node tests/browser-smoke.mjs",
+    "test": "node tests/reports.mjs && node tests/browser-smoke.mjs",
     "test:sync": "node tests/sync-worker.mjs",
     "test:sync:browser": "node tests/browser-sync.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "node --check script.js && node --check cloud/sync-worker.js && node --check service-worker.js && node --check scripts/prepare-assets.mjs && node --check tests/browser-sync.mjs && node --check tests/sync-worker.mjs"
+    "check": "node --check script.js && node --check reports.js && node --check cloud/sync-worker.js && node --check service-worker.js && node --check scripts/prepare-assets.mjs && node --check tests/reports.mjs && node --check tests/browser-smoke.mjs && node --check tests/browser-sync.mjs && node --check tests/sync-worker.mjs"
   },
   "devDependencies": {
+    "pdfjs-dist": "6.3.289",
     "wrangler": "^4.130.0"
   },
   "overrides": {
     "sharp": "0.35.4"
+  },
+  "dependencies": {
+    "jspdf": "4.2.1",
+    "jspdf-autotable": "5.0.8"
   }
 }

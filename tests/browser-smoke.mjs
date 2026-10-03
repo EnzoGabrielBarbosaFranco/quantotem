@@ -5,6 +5,7 @@ import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const browserPaths = [
@@ -433,9 +434,15 @@ async function runBrowser(name, executable, appUrl) {
     const pendingFixed = await devTools.evaluate(`(async () => {
       const expenseCard = () => document.querySelector('#dashboardView .summary-card.expense strong').textContent;
       const expenseBefore = expenseCard();
+      const numberFromMoney = value => Number(value.replace(/[^0-9,.-]/g, '').replaceAll('.', '').replace(',', '.'));
+      const budgetSpent = () => numberFromMoney(document.querySelector('.budget-values strong').textContent);
+      const budgetBefore = budgetSpent();
+      const originalDate = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toLocaleDateString('sv-SE');
       document.querySelector('[data-open-transaction="expense"]').click();
       const form = document.querySelector('#transactionForm');
       form.elements.title.value = 'Conta fixa pendente';
+      form.elements.date.value = originalDate;
+      form.elements.category.value = 'Moradia';
       form.elements.amount.value = '300,00';
       form.elements.amount.dispatchEvent(new Event('input', { bubbles: true }));
       form.elements.account.value = 'Débito automático';
@@ -458,7 +465,11 @@ async function runBrowser(name, executable, appUrl) {
       await new Promise(resolve => setTimeout(resolve, 20));
       const paidState = {
         expense: expenseCard(),
+        budget: budgetSpent(),
+        currentMonthChart: document.querySelector('#monthlyChart .expense-point:last-child title')?.textContent,
         inRecent: document.querySelector('#recentTransactions').textContent.includes(fixed.title),
+        inHistory: document.querySelector('#allTransactions').textContent.includes(fixed.title),
+        saved: JSON.parse(localStorage.getItem('contaai-transactions-v2')).find(item => item.id === fixed.id),
         toast: document.querySelector('#toast').textContent
       };
       checkbox = document.querySelector('[data-toggle-paid="' + fixed.id + '"]');
@@ -468,6 +479,11 @@ async function runBrowser(name, executable, appUrl) {
       const finalSaved = JSON.parse(localStorage.getItem('contaai-transactions-v2') || '[]');
       return {
         expenseBefore,
+        budgetBefore,
+        budgetAfterUnmarking: budgetSpent(),
+        expectedPaidExpense: new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(numberFromMoney(expenseBefore) + 300),
+        originalDate,
+        paymentDate: new Date().toLocaleDateString('sv-SE'),
         createdToast,
         fixed,
         pendingState,
@@ -480,7 +496,71 @@ async function runBrowser(name, executable, appUrl) {
     assert(pendingFixed.fixed?.recurring === true && pendingFixed.fixed?.paid === false && pendingFixed.createdToast.includes("quando for marcado como pago"), `${name}: o gasto fixo pendente não foi cadastrado corretamente`);
     assert(pendingFixed.pendingState.expense === pendingFixed.expenseBefore && !pendingFixed.pendingState.inRecent && !pendingFixed.pendingState.inHistory && pendingFixed.pendingState.inFixedExpenses, `${name}: o gasto fixo pendente entrou no saldo ou no histórico antes do pagamento`);
     assert(pendingFixed.paidState.expense !== pendingFixed.expenseBefore && pendingFixed.paidState.inRecent && pendingFixed.paidState.toast.includes("incluído no saldo"), `${name}: o gasto fixo pago não entrou no saldo e no histórico`);
+    assert(pendingFixed.paidState.inHistory && pendingFixed.paidState.saved?.date === pendingFixed.originalDate && pendingFixed.paidState.saved?.paidDate === pendingFixed.paymentDate, `${name}: o pagamento não foi contabilizado na data da confirmação ou perdeu a data original`);
+    assert(pendingFixed.paidState.expense === pendingFixed.expectedPaidExpense && pendingFixed.paidState.currentMonthChart?.includes(pendingFixed.expectedPaidExpense), `${name}: o pagamento não entrou com o valor correto no resumo e no gráfico do mês`);
+    assert(pendingFixed.paidState.budget === pendingFixed.budgetBefore + 300 && pendingFixed.budgetAfterUnmarking === pendingFixed.budgetBefore, `${name}: o orçamento não acompanhou a confirmação e o cancelamento do pagamento`);
     assert(pendingFixed.expenseAfterUnmarking === pendingFixed.expenseBefore && !pendingFixed.visibleAfterUnmarking && pendingFixed.finalPaid === false, `${name}: desmarcar o pagamento não removeu o gasto do saldo`);
+
+    const filteredPayment = await devTools.evaluate(`(async () => {
+      const fixed = JSON.parse(localStorage.getItem('contaai-transactions-v2')).find(item => item.title === 'Conta fixa pendente');
+      document.querySelector('[data-period="month"]').click();
+      document.querySelector('#prevPeriod').click();
+      const typeFilter = document.querySelector('#typeFilter');
+      typeFilter.value = 'income';
+      typeFilter.dispatchEvent(new Event('change', { bubbles: true }));
+      const categoryFilter = document.querySelector('#categoryFilter');
+      categoryFilter.value = 'Salário';
+      categoryFilter.dispatchEvent(new Event('change', { bubbles: true }));
+      const search = document.querySelector('.search-input');
+      search.value = 'busca sem correspondência';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      document.querySelector('[data-view="recurring"]').click();
+      document.querySelector('[data-toggle-paid="' + fixed.id + '"]').click();
+      const ui = JSON.parse(localStorage.getItem('contaai-ui-state-v1'));
+      const visible = document.querySelector('#allTransactions').textContent.includes(fixed.title);
+
+      document.querySelector('#recurringGrid [data-edit="' + fixed.id + '"]').click();
+      const form = document.querySelector('#transactionForm');
+      const editDate = form.elements.date.value;
+      form.elements.note.value = 'Pagamento revisado';
+      form.requestSubmit();
+      const saved = JSON.parse(localStorage.getItem('contaai-transactions-v2'));
+
+      let exportedBlob;
+      const originalCreateURL = URL.createObjectURL;
+      const originalAnchorClick = HTMLAnchorElement.prototype.click;
+      try {
+        URL.createObjectURL = blob => { exportedBlob = blob; return originalCreateURL(blob); };
+        HTMLAnchorElement.prototype.click = function () {};
+        document.querySelector('.export-btn').click();
+      } finally {
+        URL.createObjectURL = originalCreateURL;
+        HTMLAnchorElement.prototype.click = originalAnchorClick;
+      }
+      const csv = await exportedBlob.text();
+      return { ui, visible, editDate, saved: saved.find(item => item.id === fixed.id), count: saved.filter(item => item.id === fixed.id).length, csv };
+    })()`);
+    assert(filteredPayment.visible && filteredPayment.ui.typeFilter === 'all' && filteredPayment.ui.categoryFilter === 'all' && filteredPayment.ui.search === '' && filteredPayment.ui.anchor === pendingFixed.paymentDate, `${name}: os filtros ou o mês anterior esconderam o pagamento confirmado`);
+    assert(filteredPayment.editDate === pendingFixed.paymentDate && filteredPayment.saved?.date === pendingFixed.originalDate && filteredPayment.saved?.paidDate === pendingFixed.paymentDate && filteredPayment.count === 1, `${name}: editar o pagamento alterou sua data ou duplicou a despesa`);
+    assert(filteredPayment.csv.includes('"' + pendingFixed.paymentDate.split('-').reverse().join('/') + '";"Despesa";"Conta fixa pendente"'), `${name}: a exportação não utilizou a data do pagamento`);
+
+    await devTools.evaluate("location.reload(); true").catch(() => {});
+    await retry(async () => {
+      const persistedPayment = await devTools.evaluate(`(() => {
+        const saved = JSON.parse(localStorage.getItem('contaai-transactions-v2') || '[]');
+        const fixed = saved.find(item => item.title === 'Conta fixa pendente');
+        return fixed?.paid && fixed.paidDate === new Date().toLocaleDateString('sv-SE') && document.querySelector('#allTransactions')?.textContent.includes(fixed.title);
+      })()`);
+      if (!persistedPayment) throw new Error('O pagamento não reapareceu como despesa depois de recarregar');
+    });
+    const unmarkedPayment = await devTools.evaluate(`(() => {
+      const fixed = JSON.parse(localStorage.getItem('contaai-transactions-v2')).find(item => item.title === 'Conta fixa pendente');
+      document.querySelector('[data-toggle-paid="' + fixed.id + '"]').click();
+      const saved = JSON.parse(localStorage.getItem('contaai-transactions-v2')).find(item => item.id === fixed.id);
+      document.querySelector('[data-view="dashboard"]').click();
+      return { saved, expense: document.querySelector('#dashboardView .summary-card.expense strong').textContent };
+    })()`);
+    assert(unmarkedPayment.saved?.paid === false && unmarkedPayment.saved?.paidDate === null && unmarkedPayment.saved?.date === pendingFixed.originalDate && unmarkedPayment.expense === pendingFixed.expenseBefore, `${name}: desmarcar o pagamento após recarregar não restaurou o saldo e a data original`);
 
     const invalid = await devTools.evaluate(fillAndSubmit("expense", "Valor inválido", "abc"));
     assert(!invalid.modalClosed && invalid.saved.length === 3 && invalid.amountError, `${name}: um valor inválido foi aceito`);
@@ -506,6 +586,148 @@ async function runBrowser(name, executable, appUrl) {
     })()`);
     assert(blockedStorage.modalClosed && blockedStorage.visibleRows.includes("Sessão sem storage"), `${name}: o cadastro travou com armazenamento bloqueado`);
     assert(blockedStorage.toast.includes("nesta sessão"), `${name}: não houve aviso sobre o armazenamento bloqueado`);
+
+    await devTools.evaluate(`(() => {
+      const date = new Date().toLocaleDateString('sv-SE');
+      const now = Date.now();
+      localStorage.setItem('contaai-transactions-v2', JSON.stringify([
+        { id: 'salary', title: 'Salário', type: 'income', category: 'Salário', amount: 2545, date, recurring: false, paid: true, updatedAt: now },
+        { id: 'phone', title: 'Telefone', type: 'expense', category: 'Assinaturas', amount: 65, date, recurring: true, paid: true, updatedAt: now },
+        { id: 'singing', title: 'Canto', type: 'expense', category: 'Educação', amount: 300, date, recurring: true, paid: true, updatedAt: now }
+      ]));
+      localStorage.setItem('contaai-ui-state-v1', JSON.stringify({ view: 'transactions', period: 'month', anchor: date, typeFilter: 'income', categoryFilter: 'Salário', search: '' }));
+      const nativeSetItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        if (key !== 'contaai-ui-state-v1') nativeSetItem.call(this, key, value);
+      };
+      location.reload();
+      return true;
+    })()`).catch(() => {});
+    await retry(async () => {
+      if (!await devTools.evaluate("document.readyState === 'complete' && document.querySelector('#typeFilter')?.value === 'income'")) throw new Error('Filtros de lançamentos ainda não foram restaurados');
+    });
+    const existingPayments = await devTools.evaluate(`(() => {
+      const filteredHistory = document.querySelector('#allTransactions').textContent;
+      const filteredExpenses = document.querySelector('#transactionsView .summary-card.expense strong').textContent;
+      document.querySelector('[data-view="recurring"]').click();
+      const fixedPaid = document.querySelector('#fixedSummary > div:nth-child(2) strong').textContent;
+      const checked = [...document.querySelectorAll('[data-toggle-paid]')].every(input => input.checked);
+      document.querySelector('[data-view="dashboard"]').click();
+      return {
+        fixedPaid, checked, filteredHistory, filteredExpenses,
+        income: document.querySelector('#dashboardView .summary-card.income strong').textContent,
+        expenses: document.querySelector('#dashboardView .summary-card.expense strong').textContent,
+        balance: document.querySelector('#dashboardView .summary-card.balance strong').textContent,
+        recent: document.querySelector('#recentTransactions').textContent,
+        categories: document.querySelector('#categoryChart').textContent,
+        chart: document.querySelector('#monthlyChart .expense-point:last-child title')?.textContent
+      };
+    })()`);
+    assert(existingPayments.checked && existingPayments.fixedPaid === 'R$ 365,00', `${name}: a reprodução dos gastos já pagos não foi carregada`);
+    assert(existingPayments.filteredExpenses === 'R$ 0,00' && existingPayments.filteredHistory.includes('Salário') && !existingPayments.filteredHistory.includes('Telefone'), `${name}: os filtros de lançamentos deixaram de funcionar`);
+    assert(existingPayments.expenses === 'R$ 365,00' && existingPayments.income === 'R$ 2.545,00' && existingPayments.balance === 'R$ 2.180,00', `${name}: filtros ocultos de lançamentos esconderam os gastos já pagos na visão geral`);
+    assert(existingPayments.recent.includes('Telefone') && existingPayments.recent.includes('Canto') && existingPayments.categories.includes('Assinaturas') && existingPayments.categories.includes('Educação') && existingPayments.chart?.includes('R$ 365,00'), `${name}: gastos já pagos não apareceram no histórico recente e nos gráficos da visão geral`);
+
+    const searchedPayments = await devTools.evaluate(`(() => {
+      const search = document.querySelector('#dashboardView .search-input');
+      search.value = 'Telefone';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      const result = {
+        expenses: document.querySelector('#dashboardView .summary-card.expense strong').textContent,
+        balance: document.querySelector('#dashboardView .summary-card.balance strong').textContent,
+        recent: document.querySelector('#recentTransactions').textContent,
+        insights: document.querySelector('#insightsPanel').textContent
+      };
+      search.value = '';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      return result;
+    })()`);
+    assert(searchedPayments.expenses === 'R$ 365,00' && searchedPayments.balance === 'R$ 2.180,00' && searchedPayments.insights.includes('3 movimentações'), `${name}: uma busca alterou o saldo ou os totais da visão geral`);
+    assert(searchedPayments.recent.includes('Telefone') && !searchedPayments.recent.includes('Canto'), `${name}: a busca deixou de filtrar os lançamentos recentes`);
+
+    await devTools.evaluate("location.reload(); true").catch(() => {});
+    await retry(async () => {
+      const restoredOverview = await devTools.evaluate(`(() => {
+        return document.querySelector('#typeFilter')?.value === 'income' && document.querySelector('#dashboardView .summary-card.expense strong')?.textContent === 'R$ 365,00';
+      })()`);
+      if (!restoredOverview) throw new Error('Os filtros persistidos voltaram a ocultar as despesas após recarregar');
+    });
+
+    const exportOptions = await devTools.evaluate(`(() => {
+      document.querySelector('[data-view="transactions"]').click();
+      document.querySelector('#openPDFExport').click();
+      const form = document.querySelector('#exportForm');
+      const initiallySelected = form.elements.type.value === 'income' && document.querySelector('#exportPreview').textContent.includes('1 lançamento');
+      form.elements.type.value = 'all';
+      form.elements.type.dispatchEvent(new Event('change', { bubbles: true }));
+      form.elements.period.value = 'all';
+      form.elements.period.dispatchEvent(new Event('change', { bubbles: true }));
+      document.querySelector('#exportAllCategories').click();
+      const allSelected = document.querySelector('#exportAllCategories').checked && document.querySelector('#exportPreview').textContent.includes('3 lançamentos');
+      document.querySelector('#exportAllCategories').click();
+      const disabledWhenEmpty = document.querySelector('#exportPDFSubmit').disabled && document.querySelector('#exportModalCSV').disabled;
+      for (const category of ['Assinaturas', 'Educação']) {
+        document.querySelector('#exportCategories input[value="' + category + '"]').click();
+      }
+      form.elements.period.value = 'week';
+      form.elements.period.dispatchEvent(new Event('change', { bubbles: true }));
+      form.elements.date.value = new Date().toLocaleDateString('sv-SE');
+      form.elements.date.dispatchEvent(new Event('input', { bubbles: true }));
+      const selectedPreview = document.querySelector('#exportPreview').textContent;
+      window.__exportOriginalCreateURL = URL.createObjectURL;
+      window.__exportOriginalAnchorClick = HTMLAnchorElement.prototype.click;
+      URL.createObjectURL = blob => { window.__exportBlob = blob; return window.__exportOriginalCreateURL(blob); };
+      HTMLAnchorElement.prototype.click = function () { window.__exportFilename = this.download; };
+      document.querySelector('#exportPDFSubmit').click();
+      return { initiallySelected, allSelected, disabledWhenEmpty, selectedPreview, modalOpen: !document.querySelector('#exportModal').classList.contains('hidden') };
+    })()`);
+    assert(exportOptions.modalOpen && exportOptions.initiallySelected && exportOptions.allSelected && exportOptions.disabledWhenEmpty && exportOptions.selectedPreview.includes('2 lançamentos') && exportOptions.selectedPreview.includes('365,00'), `${name}: a seleção de período e categorias do relatório não atualizou a prévia corretamente`);
+    await devTools.command("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    const mobileExport = await devTools.evaluate(`(() => {
+      const modal = document.querySelector('#exportModal .modal');
+      const bounds = modal.getBoundingClientRect();
+      return bounds.left >= 0 && bounds.right <= innerWidth && modal.scrollWidth <= modal.clientWidth;
+    })()`);
+    assert(mobileExport, `${name}: a janela de exportação transbordou a tela do celular`);
+    if (process.argv.includes('--screenshots') && name === 'Chrome') {
+      const preview = await devTools.command('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      const path = resolve(tmpdir(), 'quanto-tem-exportar-pdf-mobile.png');
+      await writeFile(path, Buffer.from(preview.data, 'base64'));
+      process.stdout.write(`Prévia: ${path}\n`);
+    }
+    await devTools.command("Emulation.setDeviceMetricsOverride", { width: 1354, height: 650, deviceScaleFactor: 1, mobile: false });
+    const browserPDF = await retry(async () => {
+      const file = await devTools.evaluate(`(async () => {
+        if (!window.__exportBlob || window.__exportBlob.type !== 'application/pdf') return null;
+        const bytes = new Uint8Array(await window.__exportBlob.arrayBuffer());
+        let binary = '';
+        for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+        return { base64: btoa(binary), filename: window.__exportFilename };
+      })()`);
+      if (!file) {
+        const error = await devTools.evaluate("document.querySelector('#exportError').textContent");
+        throw new Error(error || 'O PDF ainda não foi gerado');
+      }
+      return file;
+    });
+    assert(browserPDF.filename.endsWith('.pdf'), `${name}: o arquivo gerado não tem extensão PDF`);
+    const pdfTask = getDocument({ data: new Uint8Array(Buffer.from(browserPDF.base64, 'base64')) });
+    const generatedPDF = await pdfTask.promise;
+    let pdfContent = '';
+    for (let page = 1; page <= generatedPDF.numPages; page++) pdfContent += (await (await generatedPDF.getPage(page)).getTextContent()).items.map(item => item.str).join(' ');
+    await pdfTask.destroy();
+    assert(pdfContent.includes('Telefone') && pdfContent.includes('Canto') && pdfContent.includes('Educação') && pdfContent.includes('365,00') && !pdfContent.includes('Salário'), `${name}: o PDF gerado pelo botão perdeu os acentos ou ignorou as categorias selecionadas`);
+    const browserCSV = await devTools.evaluate(`(async () => {
+      window.__exportBlob = null;
+      document.querySelector('#exportModalCSV').click();
+      const bytes = new Uint8Array(await window.__exportBlob.arrayBuffer());
+      const text = await window.__exportBlob.text();
+      URL.createObjectURL = window.__exportOriginalCreateURL;
+      HTMLAnchorElement.prototype.click = window.__exportOriginalAnchorClick;
+      document.querySelector('#exportModal .close-modal').click();
+      return { bytes: [...bytes.slice(0, 3)], text };
+    })()`);
+    assert(browserCSV.bytes.join(',') === '239,187,191' && browserCSV.text.includes('Educação') && browserCSV.text.includes('65,00') && browserCSV.text.includes('\r\n') && !browserCSV.text.includes('Salário'), `${name}: o CSV do relatório não preservou a codificação, os valores ou as categorias selecionadas`);
 
     await devTools.evaluate(`
       localStorage.setItem('contaai-transactions-v2', JSON.stringify({ antigo: true }));

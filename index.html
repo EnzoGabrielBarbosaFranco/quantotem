@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
   <svg class="svg-sprite" aria-hidden="true">
@@ -114,7 +114,7 @@
         </section>
 
         <section id="transactionsView" class="view">
-          <div class="welcome page-heading"><div><span class="eyebrow">HISTÓRICO FINANCEIRO</span><h1>Seus lançamentos</h1><p>Consulte, filtre e exporte suas movimentações.</p></div><button class="secondary-btn export-btn"><svg class="icon"><use href="#icon-download"></use></svg>Exportar CSV</button></div>
+          <div class="welcome page-heading"><div><span class="eyebrow">HISTÓRICO FINANCEIRO</span><h1>Seus lançamentos</h1><p>Consulte, filtre e exporte suas movimentações.</p></div><div class="export-actions"><button class="secondary-btn export-btn"><svg class="icon"><use href="#icon-download"></use></svg>Exportar CSV</button><button class="primary-btn" id="openPDFExport"><svg class="icon"><use href="#icon-receipt"></use></svg>Exportar PDF</button></div></div>
           <div class="period-tabs period-tabs-slot"></div>
           <div class="date-range-slot"></div>
           <section class="summary-grid summary-slot"></section>
@@ -160,6 +160,26 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="exportModal">
+    <div class="modal export-modal" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
+      <div class="modal-head"><div><span class="eyebrow">SEU RELATÓRIO FINANCEIRO</span><h2 id="exportModalTitle">Exportar lançamentos</h2></div><button class="close-modal" aria-label="Fechar"><svg class="icon"><use href="#icon-close"></use></svg></button></div>
+      <p class="export-intro">Escolha o período e as categorias. O PDF reúne os totais e todos os lançamentos selecionados, em ordem de data.</p>
+      <form id="exportForm">
+        <label>Período<select name="period" id="exportPeriod"><option value="all">Todos os lançamentos</option><option value="day">Dia</option><option value="week">Semana</option><option value="month">Mês</option><option value="year">Ano</option><option value="range">Intervalo de datas</option></select></label>
+        <label>Tipo<select name="type"><option value="all">Entradas e despesas</option><option value="income">Somente entradas</option><option value="expense">Somente despesas</option></select></label>
+        <label class="full" id="exportDateField"><span id="exportDateLabel">Data</span><input type="date" name="date"><small id="exportDateHint" class="hidden">Escolha qualquer dia da semana desejada. A semana começa na segunda-feira.</small></label>
+        <label class="full" id="exportMonthField">Mês do relatório<input type="month" name="month"></label>
+        <label class="full" id="exportYearField">Ano do relatório<input type="number" name="year" min="1900" max="9999" step="1"></label>
+        <div class="export-range full" id="exportRangeField"><label>Data inicial<input type="date" name="start"></label><label>Data final<input type="date" name="end"></label></div>
+        <fieldset class="export-category-field full"><legend>Categorias</legend><label class="export-category-all"><input type="checkbox" id="exportAllCategories"><span>Todas as categorias</span></label><div id="exportCategories" class="export-categories"></div></fieldset>
+        <label class="checkbox full"><input type="checkbox" name="includePending"><span><b>Incluir gastos fixos pendentes</b><small>Serão identificados no relatório e não reduzirão o saldo.</small></span></label>
+        <div class="export-preview full" id="exportPreview" aria-live="polite"></div>
+        <p class="export-error full hidden" id="exportError" role="alert"></p>
+        <div class="modal-actions full"><button type="button" class="secondary-btn" id="exportModalCSV">Baixar CSV</button><button class="primary-btn" id="exportPDFSubmit">Baixar PDF</button></div>
+      </form>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="goalModal">
     <div class="modal small-modal"><div class="modal-head"><div><span class="eyebrow" id="goalModalEyebrow">NOVO OBJETIVO</span><h2 id="goalModalTitle">Crie uma meta</h2></div><button class="close-modal" aria-label="Fechar"><svg class="icon"><use href="#icon-close"></use></svg></button></div>
       <form id="goalForm"><label class="full">Nome da meta<input name="title" required placeholder="Ex.: Comprar um notebook"></label><label>Valor desejado<input name="target" type="number" min="0.01" step="0.01" required></label><label>Já tenho guardado<input name="saved" type="number" min="0" step="0.01" value="0"></label><div class="modal-actions full"><button type="button" class="secondary-btn close-modal">Cancelar</button><button class="primary-btn" id="goalSubmit">Criar meta</button></div></form>
@@ -192,6 +212,6 @@
   </div>
 
   <div class="toast hidden" id="toast"></div>
-  <script src="script.js?v=4"></script>
+  <script type="module" src="script.js?v=6"></script>
 </body>
 </html>
