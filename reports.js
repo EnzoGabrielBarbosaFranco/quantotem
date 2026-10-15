@@ -49,11 +49,17 @@ export function reportTotals(items) {
   return { income: income / 100, expenses: expenses / 100, balance: (income - expenses) / 100, pending: pending / 100 };
 }
 
-export function csvBytes(items) {
+export function normalizeProfileName(value) {
+  return typeof value === "string" ? value.normalize("NFC").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) : "";
+}
+
+export function csvBytes(items, { profileName = "" } = {}) {
+  const owner = normalizeProfileName(profileName);
   const rows = [["Data", "Tipo", "Descrição", "Categoria", "Conta", "Valor (R$)", "Situação", "Observação"], ...items.map(item => [
     dateLabel(reportDate(item)), item.type === "income" ? "Entrada" : "Despesa", item.title, item.category, item.account,
     Number(item.amount).toFixed(2).replace(".", ","), isPending(item) ? "Pendente" : item.type === "income" ? "Recebido" : "Pago", item.note || ""
   ])];
+  if (owner) rows.forEach((row, index) => row.push(index === 0 ? "Titular" : owner));
   const cell = value => {
     let text = String(value ?? "").normalize("NFC");
     if (/^[\s]*[=+@-]/.test(text)) text = `'${text}`;
@@ -95,25 +101,30 @@ export async function createReportPDF(report) {
   return buildReportPDF(report, await loadPDFAssets());
 }
 
-export function buildReportPDF({ items, periodLabel, categoryLabel, typeLabel, generatedAt = new Date() }, { jsPDF, autoTable, normal, bold }) {
+export function buildReportPDF({ items, periodLabel, categoryLabel, typeLabel, profileName = "", generatedAt = new Date() }, { jsPDF, autoTable, normal, bold }) {
+  const owner = normalizeProfileName(profileName);
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true, putOnlyUsedFonts: true });
   doc.addFileToVFS("NotoSans-Regular.ttf", normal);
   doc.addFileToVFS("NotoSans-Bold.ttf", bold);
   doc.addFont("NotoSans-Regular.ttf", "NotoSans", "normal");
   doc.addFont("NotoSans-Bold.ttf", "NotoSans", "bold");
   doc.setFont("NotoSans", "normal");
-  doc.setProperties({ title: `Quanto Tem - Relatório financeiro - ${periodLabel}`, subject: "Lançamentos financeiros", author: "Quanto Tem", creator: "Quanto Tem" });
+  doc.setProperties({ title: `Quanto Tem - Relatório financeiro - ${periodLabel}`, subject: "Lançamentos financeiros", author: owner || "Quanto Tem", creator: "Quanto Tem" });
   const total = reportTotals(items);
   const blue = [12, 93, 159], navy = [17, 46, 68], muted = [88, 107, 123];
   doc.setFillColor(...blue); doc.roundedRect(15, 15, 180, 25, 3, 3, "F");
   doc.setTextColor(255); doc.setFont("NotoSans", "bold"); doc.setFontSize(19); doc.text("Quanto Tem", 21, 26);
   doc.setFont("NotoSans", "normal"); doc.setFontSize(9); doc.text("RELATÓRIO FINANCEIRO", 21, 34);
   doc.setTextColor(...navy); doc.setFont("NotoSans", "bold"); doc.setFontSize(14); doc.text("Seus lançamentos", 15, 50);
-  doc.setFont("NotoSans", "normal"); doc.setFontSize(9); doc.text(periodLabel, 15, 58);
+  doc.setFont("NotoSans", "normal"); doc.setFontSize(9);
+  const ownerLines = owner ? doc.splitTextToSize(`Titular: ${owner}`, 180) : [];
+  if (ownerLines.length) doc.text(ownerLines, 15, 58);
+  const ownerOffset = ownerLines.length ? ownerLines.length * 4 + 3 : 0;
+  doc.text(periodLabel, 15, 58 + ownerOffset);
   doc.setTextColor(...muted); doc.setFontSize(8);
   const filterLines = doc.splitTextToSize(`Categorias: ${categoryLabel} | ${typeLabel}`, 180);
-  doc.text(filterLines, 15, 65);
-  let y = 70 + (filterLines.length - 1) * 4;
+  doc.text(filterLines, 15, 65 + ownerOffset);
+  let y = 70 + ownerOffset + (filterLines.length - 1) * 4;
   [["ENTRADAS", total.income, [7, 128, 98]], ["DESPESAS PAGAS", total.expenses, [183, 64, 76]], ["SALDO", total.balance, blue]].forEach(([label, value, color], index) => {
     const x = 15 + index * 62;
     doc.setFillColor(242, 247, 251); doc.roundedRect(x, y, 56, 23, 2, 2, "F");
@@ -131,6 +142,7 @@ export function buildReportPDF({ items, periodLabel, categoryLabel, typeLabel, g
     willDrawPage: () => {
       if (doc.getNumberOfPages() > 1) {
         doc.setFont("NotoSans", "bold"); doc.setFontSize(10); doc.setTextColor(...blue); doc.text("Quanto Tem | Relatório financeiro", 15, 19);
+        if (owner) { doc.setFont("NotoSans", "normal"); doc.setFontSize(8); doc.setTextColor(...muted); doc.text(doc.splitTextToSize(`Titular: ${owner}`, 180), 15, 25); }
       }
     }
   };

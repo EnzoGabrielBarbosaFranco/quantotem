@@ -1,5 +1,5 @@
-const CACHE_NAME = "quanto-tem-shell-v7";
-const APP_SHELL = ["/", "/index.html", "/style.css?v=5", "/script.js?v=6", "/reports.js?v=2", "/favicon.svg", "/quantotem-simbolo.svg", "/manifest.webmanifest", "/vendor/jspdf.umd.min.js", "/vendor/jspdf.plugin.autotable.min.js", "/assets/fonts/NotoSans-Regular.ttf", "/assets/fonts/NotoSans-Bold.ttf"];
+const CACHE_NAME = "quanto-tem-shell-v12";
+const APP_SHELL = ["/", "/index.html", "/style.css?v=9", "/script.js?v=11", "/reports.js?v=3", "/finance.js?v=1", "/charts.js?v=1", "/favicon.svg", "/quantotem-simbolo.svg", "/manifest.webmanifest", "/vendor/jspdf.umd.min.js", "/vendor/jspdf.plugin.autotable.min.js", "/assets/fonts/NotoSans-Regular.ttf", "/assets/fonts/NotoSans-Bold.ttf"];
 
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { testImprovements } from "./browser-improvements.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const browserPaths = [
@@ -104,6 +105,100 @@ async function connectDevTools(url) {
   return { command, evaluate, exceptions, close: () => socket.close() };
 }
 
+async function testThemeStartup(devTools, name) {
+  const initialTheme = await devTools.evaluate("localStorage.getItem('meu-dinheiro-static-theme')");
+  const initialProfile = await devTools.evaluate("localStorage.getItem('contaai-profile-v1')");
+  let blockedStorageScript;
+  let appearanceScript;
+  const reload = async () => {
+    const previous = await devTools.evaluate("performance.timeOrigin");
+    await devTools.command("Page.reload");
+    await retry(async () => {
+      if (!await devTools.evaluate(`performance.timeOrigin !== ${previous} && document.readyState === 'complete'`)) throw new Error("Aguardando recarregamento do tema");
+    });
+    await devTools.evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))");
+  };
+  const colors = () => devTools.evaluate(`(() => ({
+    rootDark: document.documentElement.classList.contains('dark'),
+    rootBackground: getComputedStyle(document.documentElement).backgroundColor,
+    scheme: getComputedStyle(document.documentElement).colorScheme,
+    appBackground: getComputedStyle(document.querySelector('#app')).backgroundColor,
+    topbarBackground: getComputedStyle(document.querySelector('.topbar')).backgroundColor,
+    bodyDark: document.body.classList.contains('dark'),
+    appDark: document.querySelector('#app').classList.contains('dark'),
+    meta: document.querySelector('meta[name="color-scheme"]').content,
+    profileName: document.querySelector('#profileName').textContent,
+    initials: document.querySelector('#profileInitials').textContent,
+    greeting: document.querySelector('#dashboardGreeting').textContent,
+    pending: document.documentElement.classList.contains('profile-pending'),
+    frames: window.__startupProfileFrames || []
+  }))()`);
+  await devTools.command("Page.enable");
+  await devTools.command("Network.enable");
+  await devTools.command("Network.setCacheDisabled", { cacheDisabled: true });
+  await devTools.command("Network.setBypassServiceWorker", { bypass: true });
+  try {
+    const appearance = await devTools.command("Page.addScriptToEvaluateOnNewDocument", { source: `
+      window.__startupProfileFrames=[];
+      let frameCount=0;
+      const sample=()=>{
+        const card=document.getElementById('openProfile');
+        if(card && getComputedStyle(card).visibility==='visible')window.__startupProfileFrames.push({name:document.getElementById('profileName')?.textContent,initials:document.getElementById('profileInitials')?.textContent});
+        if(++frameCount<60)requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    ` });
+    appearanceScript = appearance.identifier;
+    await devTools.evaluate(`localStorage.setItem('contaai-profile-v1', JSON.stringify({name:'  João   da Conceição  ',updatedAt:1}));true`);
+    await devTools.evaluate("localStorage.setItem('meu-dinheiro-static-theme','dark');true");
+    await devTools.command("Network.setBlockedURLs", { urls: ["*script.js*", "*style.css*"] });
+    await reload();
+    const beforeAssets = await colors();
+    assert(beforeAssets.rootDark && beforeAssets.rootBackground === "rgb(12, 28, 42)" && beforeAssets.scheme === "dark" && beforeAssets.meta === "dark" && !beforeAssets.bodyDark && !beforeAssets.appDark, `${name}: o fundo escuro depende do CSS ou do módulo principal`);
+    assert(beforeAssets.profileName==='João da Conceição' && beforeAssets.initials==='JC' && beforeAssets.greeting==='Olá, João da Conceição' && !beforeAssets.pending && beforeAssets.frames.length>0 && beforeAssets.frames.every(frame=>frame.name==='João da Conceição'&&frame.initials==='JC'), `${name}: o perfil exibiu dados genéricos antes dos assets`);
+
+    await devTools.command("Network.setBlockedURLs", { urls: ["*script.js*"] });
+    await reload();
+    const beforeModule = await colors();
+    assert(beforeModule.rootDark && beforeModule.appBackground === "rgb(12, 28, 42)" && beforeModule.topbarBackground === "rgb(21, 41, 59)" && !beforeModule.appDark, `${name}: a interface ficou clara antes do JavaScript principal`);
+    assert(beforeModule.frames.length>0 && beforeModule.frames.every(frame=>frame.name==='João da Conceição'&&frame.initials==='JC'), `${name}: o perfil aguardou o módulo principal para mostrar o nome`);
+
+    await devTools.evaluate("localStorage.setItem('meu-dinheiro-static-theme','light');true");
+    await reload();
+    const light = await colors();
+    assert(!light.rootDark && light.appBackground === "rgb(245, 247, 249)" && light.scheme === "light" && light.meta === "light", `${name}: o tema claro não foi respeitado na inicialização`);
+    assert(light.profileName==='João da Conceição' && light.initials==='JC' && light.frames.every(frame=>frame.name==='João da Conceição'&&frame.initials==='JC'),`${name}: o perfil piscou no tema claro`);
+
+    await devTools.evaluate("localStorage.setItem('contaai-profile-v1','{invalid');true");
+    await reload();
+    const invalidProfile = await colors();
+    assert(invalidProfile.profileName==='Seu perfil' && invalidProfile.initials==='QT' && !invalidProfile.pending,`${name}: um perfil inválido impediu a exibição do cartão`);
+
+    const injected = await devTools.command("Page.addScriptToEvaluateOnNewDocument", { source: "Object.defineProperty(window,'localStorage',{configurable:true,get(){throw new DOMException('Blocked','SecurityError')}});" });
+    blockedStorageScript = injected.identifier;
+    await reload();
+    const blocked = await colors();
+    assert(blocked.rootBackground === "rgb(245, 247, 249)" && blocked.profileName==='Seu perfil' && !blocked.pending, `${name}: armazenamento bloqueado impediu a aparência inicial`);
+  } finally {
+    if (blockedStorageScript) await devTools.command("Page.removeScriptToEvaluateOnNewDocument", { identifier: blockedStorageScript });
+    if (appearanceScript) await devTools.command("Page.removeScriptToEvaluateOnNewDocument", { identifier: appearanceScript });
+    await devTools.command("Network.setBlockedURLs", { urls: [] });
+    await devTools.command("Network.setCacheDisabled", { cacheDisabled: false });
+    await devTools.command("Network.setBypassServiceWorker", { bypass: false });
+    const reset = await devTools.command("Page.addScriptToEvaluateOnNewDocument", { source: `
+      ${initialTheme === null ? "localStorage.removeItem('meu-dinheiro-static-theme');" : `localStorage.setItem('meu-dinheiro-static-theme',${JSON.stringify(initialTheme)});`}
+      ${initialProfile === null ? "localStorage.removeItem('contaai-profile-v1');" : `localStorage.setItem('contaai-profile-v1',${JSON.stringify(initialProfile)});`}
+    ` });
+    try {
+      await reload();
+      await retry(async () => {
+        if (!await devTools.evaluate("document.querySelector('#periodLabel')?.textContent !== '—' && document.querySelector('#themeBtn').hasAttribute('aria-pressed')")) throw new Error("O app ainda não reiniciou");
+      });
+    } finally { await devTools.command("Page.removeScriptToEvaluateOnNewDocument", { identifier: reset.identifier }); }
+  }
+  process.stdout.write(`✓ ${name}: tema e perfil corretos nos primeiros frames, antes dos assets, com fallback para armazenamento bloqueado\n`);
+}
+
 const fillAndSubmit = (type, title, amount, date = "") => `(async () => {
   document.querySelector('[data-open-transaction="${type}"]').click();
   const form = document.querySelector('#transactionForm');
@@ -149,6 +244,8 @@ async function runBrowser(name, executable, appUrl) {
       const ready = await devTools.evaluate("document.readyState === 'complete' && Boolean(document.querySelector('#transactionForm'))");
       if (!ready) throw new Error("Página ainda não recarregou");
     });
+
+    await testThemeStartup(devTools, name);
 
     const todayShortcut = await devTools.evaluate(`(() => {
       document.querySelector('[data-period="day"]').click();
@@ -218,21 +315,34 @@ async function runBrowser(name, executable, appUrl) {
       const brand = document.querySelector('.mobile-brand').getBoundingClientRect();
       const period = document.querySelector('.period-control').getBoundingClientRect();
       const sidebar = document.querySelector('#sidebar').getBoundingClientRect();
-      const syncButton = document.querySelector('#openSync');
-      const syncLabel = syncButton.querySelector('span').getBoundingClientRect();
+      const settingsButton = document.querySelector('#openSettings').getBoundingClientRect();
       const result = {
         brandVisible: brand.width > 90 && brand.height >= 28,
         brandText: document.querySelector('.mobile-brand').textContent,
         brandAbovePeriod: brand.bottom <= period.top,
         sidebarFits: sidebar.width <= innerWidth - 15,
-        syncSingleLine: syncLabel.height < 20 && syncButton.scrollHeight <= syncButton.clientHeight + 1,
+        settingsVisible: settingsButton.top >= 0 && settingsButton.bottom <= innerHeight,
+        vaultRemovedFromSidebar: !document.querySelector('#sidebar #syncConnected'),
         topStripeRemoved: getComputedStyle(document.body, '::before').content === 'none'
       };
       document.querySelector('#closeMenu').click();
       return result;
     })()`);
     assert(mobileHeader.brandVisible && mobileHeader.brandText.includes("Quanto") && mobileHeader.brandText.includes("Tem") && mobileHeader.brandAbovePeriod, `${name}: a marca não ficou visível e organizada no cabeçalho mobile`);
-    assert(mobileHeader.sidebarFits && mobileHeader.syncSingleLine && mobileHeader.topStripeRemoved, `${name}: a barra lateral mobile, o botão de sincronização ou a remoção da faixa superior falhou`);
+    assert(mobileHeader.sidebarFits && mobileHeader.settingsVisible && mobileHeader.vaultRemovedFromSidebar && mobileHeader.topStripeRemoved, `${name}: a barra lateral ou o acesso às configurações no celular falhou`);
+    const mobileSettings = await devTools.evaluate(`(() => {
+      document.querySelector('#openMenu').click();
+      document.querySelector('#openSettings').click();
+      const view=document.querySelector('#settingsView');
+      return {active:view.classList.contains('active'),menuClosed:!document.querySelector('#sidebar').classList.contains('open'),fits:view.scrollWidth<=view.clientWidth+1,cofre:view.contains(document.querySelector('#createVault')),backup:view.contains(document.querySelector('#backupBtn')),periodHidden:getComputedStyle(document.querySelector('.period-control')).display==='none',saved:JSON.parse(localStorage.getItem('contaai-ui-state-v1')).view};
+    })()`);
+    assert(mobileSettings.active && mobileSettings.menuClosed && mobileSettings.fits && mobileSettings.cofre && mobileSettings.backup && mobileSettings.periodHidden && mobileSettings.saved==='settings',`${name}: configurações não reuniu cofre e backup ou transbordou no celular`);
+    const settingsNavigation = await devTools.evaluate('performance.timeOrigin');
+    await devTools.evaluate('location.reload();true').catch(()=>{});
+    await retry(async()=>{
+      if(!await devTools.evaluate(`performance.timeOrigin!==${settingsNavigation} && document.readyState==='complete' && document.querySelector('#settingsView')?.classList.contains('active')`))throw new Error('Configurações ainda não restaurou após recarregar');
+    });
+    await devTools.evaluate(`document.querySelector('[data-view="dashboard"]').click();true`);
     if (process.argv.includes("--screenshots") && name === "Chrome") {
       await devTools.evaluate("new Promise(resolve => setTimeout(() => resolve(true), 300))");
       const mobileHeaderShot = await devTools.command("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
@@ -459,6 +569,8 @@ async function runBrowser(name, executable, appUrl) {
         inHistory: document.querySelector('#allTransactions').textContent.includes(fixed.title),
         inFixedExpenses: document.querySelector('#recurringGrid').textContent.includes(fixed.title)
       };
+      // A parcela de um mês anterior agora é controlada naquele mês.
+      document.querySelector('#prevPeriod').click();
       let checkbox = document.querySelector('[data-toggle-paid="' + fixed.id + '"]');
       checkbox.checked = true;
       checkbox.dispatchEvent(new Event('change', { bubbles: true }));
@@ -472,10 +584,12 @@ async function runBrowser(name, executable, appUrl) {
         saved: JSON.parse(localStorage.getItem('contaai-transactions-v2')).find(item => item.id === fixed.id),
         toast: document.querySelector('#toast').textContent
       };
+      document.querySelector('#prevPeriod').click();
       checkbox = document.querySelector('[data-toggle-paid="' + fixed.id + '"]');
       checkbox.checked = false;
       checkbox.dispatchEvent(new Event('change', { bubbles: true }));
       await new Promise(resolve => setTimeout(resolve, 20));
+      document.querySelector('#goToday').click();
       const finalSaved = JSON.parse(localStorage.getItem('contaai-transactions-v2') || '[]');
       return {
         expenseBefore,
@@ -519,7 +633,7 @@ async function runBrowser(name, executable, appUrl) {
       const ui = JSON.parse(localStorage.getItem('contaai-ui-state-v1'));
       const visible = document.querySelector('#allTransactions').textContent.includes(fixed.title);
 
-      document.querySelector('#recurringGrid [data-edit="' + fixed.id + '"]').click();
+      document.querySelector('#allTransactions [data-edit="' + fixed.id + '"]').click();
       const form = document.querySelector('#transactionForm');
       const editDate = form.elements.date.value;
       form.elements.note.value = 'Pagamento revisado';
@@ -555,7 +669,9 @@ async function runBrowser(name, executable, appUrl) {
     });
     const unmarkedPayment = await devTools.evaluate(`(() => {
       const fixed = JSON.parse(localStorage.getItem('contaai-transactions-v2')).find(item => item.title === 'Conta fixa pendente');
+      document.querySelector('#prevPeriod').click();
       document.querySelector('[data-toggle-paid="' + fixed.id + '"]').click();
+      document.querySelector('#goToday').click();
       const saved = JSON.parse(localStorage.getItem('contaai-transactions-v2')).find(item => item.id === fixed.id);
       document.querySelector('[data-view="dashboard"]').click();
       return { saved, expense: document.querySelector('#dashboardView .summary-card.expense strong').textContent };
@@ -653,6 +769,15 @@ async function runBrowser(name, executable, appUrl) {
       if (!restoredOverview) throw new Error('Os filtros persistidos voltaram a ocultar as despesas após recarregar');
     });
 
+    const profile = await devTools.evaluate(`(() => {
+      document.querySelector('#openProfile').click();
+      const form = document.querySelector('#profileForm');
+      form.elements.name.value = '  João   da Conceição  ';
+      form.requestSubmit();
+      return {name:document.querySelector('#profileName').textContent,greeting:document.querySelector('#dashboardGreeting').textContent,initials:document.querySelector('#profileInitials').textContent,saved:JSON.parse(localStorage.getItem('contaai-profile-v1')),closed:document.querySelector('#profileModal').classList.contains('hidden')};
+    })()`);
+    assert(profile.name === 'João da Conceição' && profile.initials === 'JC' && profile.greeting.includes(profile.name) && profile.saved.name === profile.name && profile.closed, `${name}: perfil não foi normalizado, salvo ou exibido corretamente`);
+
     const exportOptions = await devTools.evaluate(`(() => {
       document.querySelector('[data-view="transactions"]').click();
       document.querySelector('#openPDFExport').click();
@@ -716,7 +841,7 @@ async function runBrowser(name, executable, appUrl) {
     let pdfContent = '';
     for (let page = 1; page <= generatedPDF.numPages; page++) pdfContent += (await (await generatedPDF.getPage(page)).getTextContent()).items.map(item => item.str).join(' ');
     await pdfTask.destroy();
-    assert(pdfContent.includes('Telefone') && pdfContent.includes('Canto') && pdfContent.includes('Educação') && pdfContent.includes('365,00') && !pdfContent.includes('Salário'), `${name}: o PDF gerado pelo botão perdeu os acentos ou ignorou as categorias selecionadas`);
+    assert(pdfContent.includes('Titular: João da Conceição') && pdfContent.includes('Telefone') && pdfContent.includes('Canto') && pdfContent.includes('Educação') && pdfContent.includes('365,00') && !pdfContent.includes('Salário'), `${name}: o PDF gerado pelo botão perdeu o titular, os acentos ou ignorou as categorias selecionadas`);
     const browserCSV = await devTools.evaluate(`(async () => {
       window.__exportBlob = null;
       document.querySelector('#exportModalCSV').click();
@@ -727,7 +852,48 @@ async function runBrowser(name, executable, appUrl) {
       document.querySelector('#exportModal .close-modal').click();
       return { bytes: [...bytes.slice(0, 3)], text };
     })()`);
-    assert(browserCSV.bytes.join(',') === '239,187,191' && browserCSV.text.includes('Educação') && browserCSV.text.includes('65,00') && browserCSV.text.includes('\r\n') && !browserCSV.text.includes('Salário'), `${name}: o CSV do relatório não preservou a codificação, os valores ou as categorias selecionadas`);
+    assert(browserCSV.bytes.join(',') === '239,187,191' && browserCSV.text.includes('"Titular"') && browserCSV.text.includes('João da Conceição') && browserCSV.text.includes('Educação') && browserCSV.text.includes('65,00') && browserCSV.text.includes('\r\n') && !browserCSV.text.includes('Salário'), `${name}: o CSV do relatório não preservou o titular, a codificação, os valores ou as categorias selecionadas`);
+    const directProfileCSV = await devTools.evaluate(`(async () => {
+      let blob;
+      const create=URL.createObjectURL, click=HTMLAnchorElement.prototype.click;
+      try {
+        URL.createObjectURL=value=>{blob=value;return create(value)};
+        HTMLAnchorElement.prototype.click=()=>{};
+        document.querySelector('.export-btn').click();
+        return await blob.text();
+      } finally { URL.createObjectURL=create; HTMLAnchorElement.prototype.click=click; }
+    })()`);
+    assert(directProfileCSV.includes('"Titular"') && directProfileCSV.includes('João da Conceição'), `${name}: o botão direto de CSV não incluiu o perfil`);
+    const profileRecovery = await devTools.evaluate(`(async () => {
+      document.querySelector('#openProfile').click();
+      document.querySelector('#profileForm').elements.name.value='Mudança cancelada';
+      document.querySelector('#profileModal .close-modal').click();
+      const cancelKeptName=document.querySelector('#profileName').textContent==='João da Conceição';
+      document.querySelector('#openProfile').click();
+      document.querySelector('#profileForm').elements.name.value='<img src=x onerror="window.__profileInjected=true">';
+      document.querySelector('#profileForm').requestSubmit();
+      const escaped=!document.querySelector('#profileName img')&&!window.__profileInjected;
+      document.querySelector('#openProfile').click();
+      document.querySelector('#profileForm').elements.name.value='João da Conceição';
+      document.querySelector('#profileForm').requestSubmit();
+      let blob;
+      const create=URL.createObjectURL,click=HTMLAnchorElement.prototype.click;
+      try { URL.createObjectURL=value=>{blob=value;return create(value)};HTMLAnchorElement.prototype.click=()=>{};document.querySelector('#backupBtn').click(); }
+      finally { URL.createObjectURL=create;HTMLAnchorElement.prototype.click=click; }
+      const backup=JSON.parse(await blob.text());
+      const restore=async data=>{const input=document.querySelector('#restoreInput'),files=new DataTransfer();files.items.add(new File([JSON.stringify(data)],'backup.json',{type:'application/json'}));input.files=files.files;input.dispatchEvent(new Event('change',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,80));};
+      document.querySelector('#openProfile').click();
+      document.querySelector('#profileForm').elements.name.value='Maria de Souza';
+      document.querySelector('#profileForm').requestSubmit();
+      const legacy={...backup,version:4};delete legacy.profile;
+      await restore(legacy);
+      const legacyKeptName=document.querySelector('#profileName').textContent==='Maria de Souza';
+      await restore(backup);
+      return {cancelKeptName,escaped,legacyKeptName,backupName:backup.profile?.name,restoredName:document.querySelector('#profileName').textContent};
+    })()`);
+    assert(profileRecovery.cancelKeptName && profileRecovery.escaped && profileRecovery.legacyKeptName && profileRecovery.backupName==='João da Conceição' && profileRecovery.restoredName===profileRecovery.backupName, `${name}: perfil não preservou cancelamento, segurança do texto ou compatibilidade do backup`);
+
+    await testImprovements(devTools, name, assert);
 
     await devTools.evaluate(`
       localStorage.setItem('contaai-transactions-v2', JSON.stringify({ antigo: true }));

@@ -12,6 +12,38 @@ Controle financeiro pessoal local-first: funciona no navegador e, quando publica
 - tema claro/escuro e instalação como PWA;
 - sincronização opcional entre navegadores.
 
+## Painel e planejamento
+
+### Meu perfil
+
+Clique no cartão **Seu perfil**, na barra lateral (também acessível pelo menu no celular), para informar ou editar seu nome. O painel passa a exibir uma saudação e um avatar com suas iniciais. O nome é opcional; salvar o campo vazio remove a identificação. Não é necessário criar login.
+
+O PDF inclui o titular na primeira página, nos cabeçalhos das páginas seguintes e nos metadados de autor. O CSV acrescenta uma coluna **Titular** em cada lançamento quando há nome cadastrado, mantendo as demais colunas e o formato UTF-8. Sem nome, os arquivos continuam sendo gerados normalmente.
+
+O perfil acompanha os backups e a sincronização criptografada do cofre. Dispositivos ligados ao mesmo cofre compartilham o mesmo perfil. Restaurar um backup antigo sem perfil mantém o nome atual do navegador.
+
+### Configurações
+
+O item **Configurações**, no menu lateral (ou no menu do celular), reúne todas as opções do cofre e dos backups. Nessa tela é possível criar ou conectar um cofre, acompanhar o estado da sincronização, copiar o código, baixar a recuperação, sincronizar manualmente e desconectar o navegador. As ações de baixar e restaurar backup ficam em um cartão separado. A tela selecionada é mantida ao recarregar o aplicativo.
+
+### Visão geral
+
+A tela inicial prioriza as contas do mês e os lançamentos recentes. O cartão **Depois dos compromissos** desconta as contas ainda pendentes do resultado registrado no mês indicado; não estima receitas ou gastos que você não cadastrou. Ele acompanha o mês do cabeçalho, mesmo quando o histórico está filtrado por dia, semana ou intervalo.
+
+O gráfico dos últimos seis meses mostra entradas, despesas e saldo ao passar o mouse ou tocar em um mês. Com teclado, use Tab para chegar ao gráfico, as setas para mudar de mês, Home/End para ir às extremidades e Escape para fechar os valores. As linhas também se diferenciam pelo traçado. Fontes e bibliotecas são locais e o app pode continuar funcionando offline.
+
+Ao informar um prazo em uma meta, o app calcula o aporte mensal necessário, incluindo o mês atual e arredondando para cima em centavos. Os aportes representam o acompanhamento do objetivo e não criam movimentações na conta.
+
+### Gastos fixos por mês
+
+Cada gasto fixo representa uma série mensal a partir da data do cadastro. Os registros existentes são preservados e passam a servir de origem para suas próximas parcelas. Séries distintas não são unificadas automaticamente, mesmo que tenham a mesma descrição.
+
+Cada mês possui sua própria situação de pagamento. Uma conta paga em janeiro reaparece pendente em fevereiro; vencimentos nos dias 29, 30 e 31 se ajustam ao último dia dos meses mais curtos. Navegar pelos meses não grava lançamentos: uma parcela só é salva quando editada ou paga. IDs determinísticos evitam duplicar uma parcela gerada por dois dispositivos.
+
+Editar uma parcela gerada altera apenas aquele mês. Editar o registro de origem altera a base das próximas parcelas ainda não salvas. Excluir uma parcela gerada remove somente aquele mês; excluir a origem remove essa conta e suas projeções futuras, preservando outras parcelas já salvas. **Encerrar após este mês** interrompe novas parcelas e mantém o histórico. O pagamento entra no fluxo de caixa na data da confirmação, mesmo se a conta vencer em outro mês.
+
+Os relatórios com **Incluir gastos fixos pendentes** também incluem as parcelas projetadas no intervalo escolhido. Em todo o histórico, são consideradas as recorrências até o mês atual. O limite para projetar pendências em uma única exportação é de 100 anos.
+
 Sem um servidor publicado, todo o app continua funcionando normalmente com `localStorage`. A sincronização é a única funcionalidade que depende da função serverless.
 
 Gastos fixos pendentes ficam fora das despesas e do saldo. Ao marcar um gasto como pago na área de gastos fixos, ele entra no histórico, nos gráficos e no orçamento na data da confirmação, mantendo a data original do cadastro. Desmarcar o pagamento retira a despesa desses totais. Pagamentos antigos continuam usando a data que já estava registrada.

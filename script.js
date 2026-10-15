@@ -1,4 +1,6 @@
-import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createReportPDF } from "./reports.js?v=2";
+import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createReportPDF, normalizeProfileName } from "./reports.js?v=3";
+import { recurringForMonth, monthlyPlan, goalMonthlyContribution } from "./finance.js?v=1";
+import { renderTrendChart, clearTrendChart } from "./charts.js?v=1";
 
 (() => {
   "use strict";
@@ -7,6 +9,7 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
   const GOALS_KEY = "contaai-goals-v2";
   const CATEGORIES_KEY = "contaai-categories-v1";
   const BUDGETS_KEY = "contaai-budgets-v1";
+  const PROFILE_KEY = "contaai-profile-v1";
   const TOMBSTONES_KEY = "contaai-tombstones-v1";
   const SYNC_SECRET_KEY = "contaai-sync-secret-v1";
   const UI_STATE_KEY = "contaai-ui-state-v1";
@@ -128,6 +131,7 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
   const today = new Date();
   const savedAnchor = /^\d{4}-\d{2}-\d{2}$/.test(savedUI.anchor || "") ? parseDate(savedUI.anchor) : today;
   const state = {
+    profile: normalizeProfile(load(PROFILE_KEY, {})),
     transactions: ensureArray(load(STORAGE_KEY, []), []),
     goals: ensureArray(load(GOALS_KEY, []), []),
     categories: ensureArray(load(CATEGORIES_KEY, defaultCategories), defaultCategories),
@@ -140,7 +144,7 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     search: typeof savedUI.search === "string" ? savedUI.search : "",
     typeFilter: ["all", "expense", "income"].includes(savedUI.typeFilter) ? savedUI.typeFilter : "all",
     categoryFilter: typeof savedUI.categoryFilter === "string" ? savedUI.categoryFilter : "all",
-    view: ["dashboard", "transactions", "recurring", "budgets", "goals"].includes(savedUI.view) ? savedUI.view : "dashboard",
+    view: ["dashboard", "transactions", "recurring", "budgets", "goals", "settings"].includes(savedUI.view) ? savedUI.view : "dashboard",
     transactionType: ["expense", "income"].includes(savedUI.transactionType) ? savedUI.transactionType : "expense"
   };
   state.transactions = state.transactions.filter(item => item && typeof item === "object")
@@ -181,7 +185,7 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     .filter((budget, index, items) => items.findIndex(item => item.category.localeCompare(budget.category, "pt-BR", { sensitivity: "base" }) === 0) === index);
   state.tombstones = state.tombstones.filter(item => item && ["transactions", "goals", "budgets", "categories"].includes(item.collection) && typeof item.id === "string" && Number.isFinite(Number(item.deletedAt)))
     .map(item => ({ collection: item.collection, id: item.id, deletedAt: Number(item.deletedAt) }));
-  logicalTime = Math.max(logicalTime, ...state.transactions.map(item => item.updatedAt), ...state.goals.map(item => item.updatedAt), ...state.budgets.map(item => item.updatedAt), ...state.categories.map(item => item.updatedAt), ...state.tombstones.map(item => item.deletedAt));
+  logicalTime = Math.max(logicalTime, state.profile.updatedAt, ...state.transactions.map(item => item.updatedAt), ...state.goals.map(item => item.updatedAt), ...state.budgets.map(item => item.updatedAt), ...state.categories.map(item => item.updatedAt), ...state.tombstones.map(item => item.deletedAt));
   state.categories.forEach(category => { colors[category.name] = category.color || colors.Outros; });
   const syncRuntime = {
     secret: normalizeVaultSecret(storageGet(SYNC_SECRET_KEY) || ""),
@@ -198,14 +202,18 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     catch { return fallback; }
   }
   function ensureArray(value, fallback) { return Array.isArray(value) ? value : fallback; }
+  function normalizeProfile(value) {
+    return { name: normalizeProfileName(value?.name), updatedAt: Number.isFinite(Number(value?.updatedAt)) && Number(value.updatedAt) >= 0 ? Number(value.updatedAt) : 0 };
+  }
   function save() {
+    const profileSaved = storageSet(PROFILE_KEY, JSON.stringify(state.profile));
     const transactionsSaved = storageSet(STORAGE_KEY, JSON.stringify(state.transactions));
     const goalsSaved = storageSet(GOALS_KEY, JSON.stringify(state.goals));
     const categoriesSaved = storageSet(CATEGORIES_KEY, JSON.stringify(state.categories));
     const budgetsSaved = storageSet(BUDGETS_KEY, JSON.stringify(state.budgets));
     const tombstonesSaved = storageSet(TOMBSTONES_KEY, JSON.stringify(state.tombstones));
     if (syncRuntime.secret && !syncRuntime.applyingRemote) scheduleSync();
-    return transactionsSaved && goalsSaved && categoriesSaved && budgetsSaved && tombstonesSaved;
+    return profileSaved && transactionsSaved && goalsSaved && categoriesSaved && budgetsSaved && tombstonesSaved;
   }
   function saveUI(overrides = {}) {
     return storageSet(UI_STATE_KEY, JSON.stringify({
@@ -285,7 +293,8 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
   function syncDocument() {
     return {
       version: 1,
-      updatedAt: Math.max(0, ...state.transactions.map(item => item.updatedAt), ...state.goals.map(item => item.updatedAt), ...state.budgets.map(item => item.updatedAt), ...state.categories.map(item => item.updatedAt), ...state.tombstones.map(item => item.deletedAt)),
+      profile: { ...state.profile },
+      updatedAt: Math.max(state.profile.updatedAt, 0, ...state.transactions.map(item => item.updatedAt), ...state.goals.map(item => item.updatedAt), ...state.budgets.map(item => item.updatedAt), ...state.categories.map(item => item.updatedAt), ...state.tombstones.map(item => item.deletedAt)),
       transactions: state.transactions.map(item => ({ ...item })),
       goals: state.goals.map(item => ({ ...item })),
       budgets: state.budgets.map(item => ({ ...item })),
@@ -298,6 +307,7 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     return {
       version: 1,
       updatedAt: Number(safe.updatedAt) || 0,
+      profile: normalizeProfile(safe.profile),
       transactions: ensureArray(safe.transactions, []).filter(item => item && typeof item.id === "string").map(item => ({ ...item, updatedAt: Number(item.updatedAt) || 0 })),
       goals: ensureArray(safe.goals, []).filter(item => item && typeof item.id === "string").map((item, index) => ({ ...item, color: safeColor(item.color, goalColors[index % goalColors.length]), updatedAt: Number(item.updatedAt) || 0 })),
       budgets: ensureArray(safe.budgets, []).filter(item => item && typeof item.id === "string").map(item => ({ ...item, updatedAt: Number(item.updatedAt) || 0 })),
@@ -336,13 +346,14 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     });
     const merged = {
       version: 1,
+      profile: local.profile.updatedAt > remote.profile.updatedAt || (local.profile.updatedAt === remote.profile.updatedAt && local.profile.name > remote.profile.name) ? local.profile : remote.profile,
       transactions: mergeCollection("transactions"),
       goals: mergeCollection("goals"),
       budgets: [...budgetsByCategory.values()],
       categories: [...categoriesByName.values()],
       tombstones
     };
-    merged.updatedAt = Math.max(local.updatedAt, remote.updatedAt, ...merged.transactions.map(item => item.updatedAt), ...merged.goals.map(item => item.updatedAt), ...merged.budgets.map(item => item.updatedAt), ...merged.categories.map(item => item.updatedAt), ...tombstones.map(item => item.deletedAt));
+    merged.updatedAt = Math.max(local.updatedAt, remote.updatedAt, merged.profile.updatedAt, ...merged.transactions.map(item => item.updatedAt), ...merged.goals.map(item => item.updatedAt), ...merged.budgets.map(item => item.updatedAt), ...merged.categories.map(item => item.updatedAt), ...tombstones.map(item => item.deletedAt));
     return merged;
   }
   function comparableDocument(documentValue) {
@@ -354,6 +365,7 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
   function applySyncDocument(documentValue) {
     const merged = normalizeRemoteDocument(documentValue);
     syncRuntime.applyingRemote = true;
+    state.profile = merged.profile;
     state.transactions = merged.transactions;
     state.goals = merged.goals;
     state.budgets = merged.budgets;
@@ -436,9 +448,7 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     const connected = Boolean(syncRuntime.secret);
     document.querySelector("#syncDisconnected").classList.toggle("hidden", connected);
     document.querySelector("#syncConnected").classList.toggle("hidden", !connected);
-    document.querySelector("#syncSidebarTitle").textContent = connected ? "Cofre sincronizado" : "Dados neste navegador";
-    document.querySelector("#syncSidebarText").textContent = connected ? syncRuntime.error ? "Seus dados locais estão seguros. Abra para tentar novamente." : "Alterações são protegidas e compartilhadas com seus dispositivos." : "Ative o cofre para usar os mesmos dados nos seus outros navegadores.";
-    document.querySelector("#openSync span").textContent = connected ? "Ver sincronização" : "Ativar sincronização";
+    document.querySelector("#syncConnectionLabel").textContent = syncRuntime.busy ? "Sincronizando…" : !connected ? "Somente neste navegador" : syncRuntime.error ? "Sincronização pendente" : !navigator.onLine ? "Você está offline" : "Cofre conectado";
     const dot = document.querySelector("#syncDot");
     dot.className = syncRuntime.busy ? "syncing" : connected ? (syncRuntime.error ? "error" : "connected") : "";
     if (!connected) return;
@@ -503,17 +513,30 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     if (search && !searchableText.includes(search)) state.search = "";
   }
   function totals(items) {
-    const income = items.filter(item => item.type === "income").reduce((sum, item) => sum + Number(item.amount), 0);
-    const expenses = items.filter(item => item.type === "expense").reduce((sum, item) => sum + Number(item.amount), 0);
-    return { income, expenses, balance: income - expenses, savings: income ? Math.max(0, Math.round((income - expenses) / income * 100)) : 0 };
+    const { income, expenses, balance } = reportTotals(items);
+    return { income, expenses, balance, savings: income ? Math.max(0, Math.round(balance / income * 100)) : 0 };
   }
   function groups(items) {
-    const grouped = {};
-    items.filter(item => item.type === "expense").forEach(item => grouped[item.category] = (grouped[item.category] || 0) + Number(item.amount));
-    return Object.entries(grouped).sort((a, b) => b[1] - a[1]);
+    const grouped = new Map();
+    items.filter(item => item.type === "expense").forEach(item => grouped.set(item.category, (grouped.get(item.category) || 0) + Math.round(Number(item.amount) * 100)));
+    return [...grouped].map(([name, cents]) => [name, cents / 100]).sort((a, b) => b[1] - a[1]);
   }
 
+  function renderProfile() {
+    const name = state.profile.name;
+    const parts = name.split(" ").filter(Boolean);
+    const initials = parts.length ? `${Array.from(parts[0])[0]}${parts.length > 1 ? Array.from(parts.at(-1))[0] : ""}`.toLocaleUpperCase("pt-BR") : "QT";
+    document.querySelector("#profileName").textContent = name || "Seu perfil";
+    document.querySelector("#profileInitials").textContent = initials;
+    document.querySelector("#profileCaption").textContent = name ? "Editar perfil" : "Adicionar seu nome";
+    const button = document.querySelector("#openProfile");
+    button.setAttribute("aria-label", name ? `Editar perfil de ${name}` : "Adicionar seu nome ao perfil");
+    button.title = name || "Adicionar seu nome";
+    document.querySelector("#dashboardGreeting").textContent = name ? `Olá, ${name}` : "SEU DINHEIRO, COM CLAREZA";
+    document.querySelector("#exportProfile").textContent = name ? `Titular do relatório: ${name}` : "Adicione seu nome em Seu perfil para identificar os relatórios.";
+  }
   function render() {
+    renderProfile();
     renderPeriodLabel();
     renderTabs();
     renderCategoryFilters();
@@ -526,6 +549,7 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     renderCategoryChart(groups(periodItems), total.expenses);
     renderTransactions(items, periodItems.filter(matchesSearch));
     renderInsights(groups(periodItems), total, periodItems.length);
+    renderPlanning();
     renderRecurring();
     renderBudgets();
     renderGoals();
@@ -549,7 +573,7 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
   }
   function renderTabs() {
     const labels = { day: "Dia", week: "Semana", month: "Mês", year: "Ano", range: "Datas" };
-    const html = Object.entries(labels).map(([key, label]) => `<button class="${state.period === key ? "active" : ""}" data-period="${key}">${label}</button>`).join("");
+    const html = Object.entries(labels).map(([key, label]) => `<button class="${state.period === key ? "active" : ""}" data-period="${key}" aria-pressed="${state.period === key}">${label}</button>`).join("");
     document.querySelectorAll(".period-tabs-slot").forEach(slot => slot.innerHTML = html);
     const rangeHTML = state.period === "range" ? `<div class="date-range"><label>De<input type="date" data-range-start value="${state.rangeStart}" max="${state.rangeEnd}"></label><span>até</span><label>Até<input type="date" data-range-end value="${state.rangeEnd}" min="${state.rangeStart}"></label></div>` : "";
     document.querySelectorAll(".date-range-slot").forEach(slot => slot.innerHTML = rangeHTML);
@@ -581,24 +605,15 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
       const date = new Date(state.anchor.getFullYear(), state.anchor.getMonth() - 5 + index, 1);
       const monthItems = chartItems.filter(item => transactionDate(item).startsWith(monthKey(date)));
       const total = totals(monthItems);
-      return { label: date.toLocaleDateString("pt-BR", { month: "short" }).replace(".", ""), income: total.income, expense: total.expenses };
+      return { label: date.toLocaleDateString("pt-BR", { month: "short" }).replace(".", ""), fullLabel: date.toLocaleDateString("pt-BR", { month: "long", year: "numeric" }), income: total.income, expense: total.expenses };
     });
     const target = document.querySelector("#monthlyChart");
     if (!months.some(month => month.income || month.expense)) {
+      clearTrendChart(target);
       target.innerHTML = empty("O histórico aparecerá aqui", "Adicione entradas e despesas para acompanhar a evolução mensal.");
       return;
     }
-    const width = 720, height = 236, left = 62, right = 18, top = 18, bottom = 38;
-    const rawMaximum = Math.max(...months.flatMap(month => [month.income, month.expense]), 1);
-    const magnitude = 10 ** Math.floor(Math.log10(rawMaximum));
-    const maximum = Math.ceil(rawMaximum / magnitude) * magnitude;
-    const chartWidth = width - left - right, chartHeight = height - top - bottom;
-    const points = type => months.map((month, index) => ({ x: left + chartWidth * index / (months.length - 1), y: top + chartHeight * (1 - month[type] / maximum), value: month[type] }));
-    const path = values => values.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ");
-    const incomePoints = points("income"), expensePoints = points("expense");
-    const area = `${path(incomePoints)} L${incomePoints[incomePoints.length - 1].x},${height - bottom} L${incomePoints[0].x},${height - bottom} Z`;
-    const ticks = [1, .75, .5, .25, 0];
-    target.innerHTML = `<svg class="trend-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Comparação de entradas e despesas dos últimos seis meses"><defs><linearGradient id="incomeArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0FFCBE" stop-opacity=".22"/><stop offset="1" stop-color="#0FFCBE" stop-opacity="0"/></linearGradient></defs>${ticks.map(tick => { const y = top + chartHeight * (1 - tick); return `<line class="chart-gridline" x1="${left}" x2="${width - right}" y1="${y}" y2="${y}"/><text class="axis-label" x="${left - 12}" y="${y + 3}" text-anchor="end">${shortMoney.format(maximum * tick)}</text>`; }).join("")}<path class="chart-area-fill" d="${area}"/><path class="chart-line expense-line" d="${path(expensePoints)}"/><path class="chart-line income-line" d="${path(incomePoints)}"/>${incomePoints.map((point, index) => `<g><circle class="chart-point income-point" cx="${point.x}" cy="${point.y}" r="4"><title>Entradas em ${months[index].label}: ${money.format(point.value)}</title></circle><text class="month-label" x="${point.x}" y="${height - 12}" text-anchor="middle">${months[index].label}</text></g>`).join("")}${expensePoints.map((point, index) => `<circle class="chart-point expense-point" cx="${point.x}" cy="${point.y}" r="4"><title>Despesas em ${months[index].label}: ${money.format(point.value)}</title></circle>`).join("")}</svg>`;
+    renderTrendChart(target, months);
   }
   function renderCategoryChart(categoryGroups, total) {
     const target = document.querySelector("#categoryChart");
@@ -632,15 +647,49 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     }
     const balance = total.balance;
     const expenseShare = total.income ? Math.round(total.expenses / total.income * 100) : null;
-    target.innerHTML = `<div class="insights-title"><span>${icon("chart")}</span><div><small>RESUMO DO PERÍODO</small><h2>Leitura dos seus números</h2></div></div><div class="insight-highlight"><span>Resultado do período</span><strong class="${balance < 0 ? "negative" : ""}">${money.format(balance)}</strong><small>Entradas menos despesas</small></div><div class="insight-list"><div><span class="insight-number">01</span><p><strong>${top ? `Maior gasto: ${escapeHTML(top[0])}` : "Nenhuma despesa"}</strong>${top ? `${money.format(top[1])}, equivalente a ${Math.round(top[1] / total.expenses * 100)}% das despesas.` : "Não houve saídas registradas neste período."}</p></div><div><span class="insight-number">02</span><p><strong>${expenseShare === null ? "Sem renda registrada" : `${expenseShare}% da renda foi utilizada`}</strong>${expenseShare === null ? "Adicione suas entradas para comparar renda e despesas." : `${money.format(total.expenses)} em despesas sobre ${money.format(total.income)} em entradas.`}</p></div><div><span class="insight-number">03</span><p><strong>${transactionCount} ${transactionCount === 1 ? "movimentação" : "movimentações"}</strong>Total considerado no filtro e período selecionados.</p></div></div><button data-scroll-categories>Ver categorias ${icon("arrow-right")}</button>`;
+    const monthExpenses = state.transactions.filter(item => isPostedTransaction(item) && item.type === "expense" && transactionDate(item).startsWith(monthKey(state.anchor)));
+    const alerts = state.budgets.map(budget => ({ ...budget, spent: totals(monthExpenses.filter(item => item.category === budget.category)).expenses })).filter(budget => budget.spent / budget.limit >= .8).sort((a, b) => b.spent / b.limit - a.spent / a.limit);
+    const alert = alerts[0];
+    target.innerHTML = `<div class="insights-title"><span>${icon("chart")}</span><div><small>UM OLHAR MAIS ATENTO</small><h2>O que seus números dizem</h2></div></div><div class="insight-list">${alert ? `<button class="insight-link" data-go-view="budgets"><span class="insight-number warning">${icon("budget")}</span><p><strong>${escapeHTML(alert.category)}: ${Math.round(alert.spent / alert.limit * 100)}% do limite</strong>${alert.spent > alert.limit ? `${money.format(alert.spent - alert.limit)} acima do orçamento mensal.` : `${money.format(alert.limit - alert.spent)} disponíveis no orçamento mensal.`}<span class="inline-link">Revisar orçamento →</span></p></button>` : `<div><span class="insight-number">${icon("shield")}</span><p><strong>${state.budgets.length ? "Limites sob controle" : "Dê um destino ao seu dinheiro"}</strong>${state.budgets.length ? "As categorias planejadas estão abaixo de 80% do limite mensal." : "Crie um orçamento para acompanhar seus gastos por categoria."}</p></div>`}<div><span class="insight-number">${icon("chart")}</span><p><strong>${top ? `Maior gasto: ${escapeHTML(top[0])}` : "Nenhuma despesa no período"}</strong>${top ? `${money.format(top[1])} · ${Math.round(top[1] / total.expenses * 100)}% das despesas do período.` : "Suas despesas aparecerão aqui quando forem registradas."}</p></div><div><span class="insight-number">${icon("piggy-bank")}</span><p><strong>${expenseShare === null ? "Sua renda completa o panorama" : `${expenseShare}% da renda utilizada`}</strong>${expenseShare === null ? "Registre suas entradas para comparar o que entra e o que sai." : `${money.format(balance)} de resultado em ${transactionCount} movimentações no período.`}</p></div></div><button class="text-button" data-go-view="budgets">Acompanhar orçamentos ${icon("arrow-right")}</button>`;
+  }
+  function monthRecurring() { return recurringForMonth(state.transactions, monthKey(state.anchor), state.tombstones); }
+  function findRecurring(id) { return state.transactions.find(item => item.id === id) || monthRecurring().find(item => item.id === id); }
+  function dueStatus(item) {
+    if (item.paid) return { label: "Pago", tone: "paid" };
+    const date = toISO(new Date());
+    return item.date < date ? { label: "Vencida", tone: "overdue" } : item.date === date ? { label: "Vence hoje", tone: "today" } : { label: `Dia ${item.date.slice(8)}`, tone: "upcoming" };
+  }
+  function renderPlanning() {
+    const month = monthKey(state.anchor);
+    const plan = monthlyPlan(state.transactions, month, state.tombstones);
+    const label = state.anchor.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+    const pending = plan.recurring.filter(item => !item.paid);
+    const bills = pending.length ? pending.slice(0, 3) : plan.recurring.slice(0, 3);
+    document.querySelector("#upcomingBills").innerHTML = bills.length ? `<div class="bill-list">${bills.map(item => {
+      const status = dueStatus(item);
+      return `<div class="bill-row"><span class="bill-date"><b>${item.date.slice(8)}</b><small>${parseDate(item.date).toLocaleDateString("pt-BR", { month: "short" }).replace(".", "")}</small></span><div class="bill-description"><strong>${escapeHTML(item.title)}</strong><span class="status ${status.tone}">${status.label}</span></div><strong class="bill-amount">${money.format(item.amount)}</strong>${item.paid ? `<span class="bill-check" aria-label="Pago">✓</span>` : `<button class="pay-button" data-pay="${escapeHTML(item.id)}" aria-label="Confirmar pagamento de ${escapeHTML(item.title)}">Pagar</button>`}</div>`;
+    }).join("")}</div><p class="panel-note">${escapeHTML(label)} · ${pending.length ? `${pending.length} ${pending.length === 1 ? "conta pendente" : "contas pendentes"}` : "Tudo pago por aqui"}</p>` : `<div class="compact-empty">${icon("repeat")}<div><strong>Um mês mais previsível começa aqui</strong><p>Cadastre aluguel, internet e outras contas recorrentes.</p></div><button class="text-button" data-go-view="recurring">Adicionar conta →</button></div>`;
+    document.querySelector("#forecastPanel").innerHTML = `<div class="forecast-heading"><span class="eyebrow">DEPOIS DOS COMPROMISSOS</span>${icon("wallet")}</div><span class="forecast-label">Saldo do mês, descontando contas pendentes</span><strong class="forecast-value ${plan.projected < 0 ? "negative" : ""}">${money.format(plan.projected)}</strong><div class="forecast-equation"><span>Resultado registrado <b>${money.format(plan.balance)}</b></span><span>Contas ainda pendentes <b>− ${money.format(plan.pending)}</b></span></div><p>${escapeHTML(label)}. Considera apenas valores registrados e contas deste mês; novos gastos e receitas podem mudar o resultado.</p>`;
+    const hasIncome = state.transactions.some(item => item.type === "income");
+    const steps = [[hasIncome, "Registre sua renda", "income"], [state.transactions.some(item => item.recurring), "Organize suas contas", "recurring"], [state.budgets.length > 0, "Defina um orçamento", "budgets"]];
+    const onboarding = document.querySelector("#gettingStarted");
+    onboarding.classList.toggle("hidden", steps.every(([done]) => done) || state.transactions.length > 5);
+    onboarding.innerHTML = `<div><span class="eyebrow">UM BOM COMEÇO</span><h2>Seu controle financeiro em 3 passos</h2></div><div class="onboarding-steps">${steps.map(([done, text, action], index) => `<button class="${done ? "done" : ""}" ${action === "income" ? 'data-open-transaction="income"' : `data-go-view="${action}"`}><span>${done ? "✓" : String(index + 1).padStart(2, "0")}</span>${text}${icon("arrow-right")}</button>`).join("")}</div>`;
   }
   function renderRecurring() {
-    const items = state.transactions.filter(item => item.recurring && item.type === "expense");
-    const committed = items.reduce((sum, item) => sum + Number(item.amount), 0);
-    const paid = items.filter(item => item.paid).reduce((sum, item) => sum + Number(item.amount), 0);
-    document.querySelector("#fixedCount").textContent = items.length;
+    const items = monthRecurring();
+    const committed = items.reduce((sum, item) => sum + Math.round(Number(item.amount) * 100), 0) / 100;
+    const paid = items.filter(item => item.paid).reduce((sum, item) => sum + Math.round(Number(item.amount) * 100), 0) / 100;
+    document.querySelector("#fixedCount").textContent = items.filter(item => !item.paid).length;
     document.querySelector("#fixedSummary").innerHTML = `<div><span>Comprometido no mês</span><strong>${money.format(committed)}</strong></div><div><span>Já pago</span><strong>${money.format(paid)}</strong></div><div><span>Falta pagar</span><strong>${money.format(committed - paid)}</strong></div><div class="fixed-progress"><span style="width:${committed ? paid / committed * 100 : 0}%"></span></div>`;
-    document.querySelector("#recurringGrid").innerHTML = items.length ? items.map(item => { const id = escapeHTML(item.id); return `<div class="recurring-card ${item.paid ? "paid" : ""}"><div class="recurring-top"><span class="category-icon" style="color:${colors[item.category] || colors.Outros};background:${colors[item.category] || colors.Outros}18">${icon("repeat")}</span><div class="recurring-actions"><button class="edit-button" data-edit="${id}" aria-label="Editar gasto fixo" title="Editar gasto fixo">${icon("edit")}</button><button class="delete-button" data-delete="${id}" aria-label="Excluir gasto fixo" title="Excluir gasto fixo">${icon("trash")}</button></div></div><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.category)} · todo mês</small><b>${money.format(item.amount)}</b><label><input type="checkbox" data-toggle-paid="${id}" ${item.paid ? "checked" : ""}><span>${item.paid ? "Pago" : "Marcar como pago"}</span></label></div>`; }).join("") : empty("Nenhum gasto fixo cadastrado", "Cadastre uma despesa e marque-a como gasto fixo.");
+    document.querySelector("#recurringGrid").innerHTML = items.length ? items.map(item => {
+      const id = escapeHTML(item.id), status = dueStatus(item);
+      const root = state.transactions.find(entry => entry.id === (item.recurrenceParent || item.id));
+      const stopAction = root && (!root.recurrenceEnd || root.recurrenceEnd > monthKey(state.anchor))
+        ? `<button class="text-button stop-recurring" data-stop-recurring="${escapeHTML(root.id)}">Encerrar após este mês</button>`
+        : root?.recurrenceEnd ? `<small class="stop-recurring">Série encerrada após ${escapeHTML(String(root.recurrenceEnd).split("-").reverse().join("/"))}</small>` : "";
+      return `<div class="recurring-card ${item.paid ? "paid" : ""}"><div class="recurring-top"><span class="category-icon" style="color:${colors[item.category] || colors.Outros};background:${colors[item.category] || colors.Outros}18">${icon("repeat")}</span><div class="recurring-actions"><button class="edit-button" data-edit="${id}" aria-label="Editar gasto fixo" title="${item.recurrenceParent ? "Editar este mês" : "Editar conta e próximas recorrências"}">${icon("edit")}</button><button class="delete-button" data-delete="${id}" aria-label="Excluir gasto fixo" title="${item.recurrenceParent ? "Excluir este mês" : "Excluir conta e próximas recorrências"}">${icon("trash")}</button></div></div><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.category)} · vencimento ${parseDate(item.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}</small><b>${money.format(item.amount)}</b><span class="status ${status.tone}">${status.label}</span><label><input type="checkbox" data-toggle-paid="${id}" ${item.paid ? "checked" : ""}><span>${item.paid ? "Pagamento confirmado" : "Marcar como pago"}</span></label>${stopAction}</div>`;
+    }).join("") : empty("Nenhuma conta neste mês", "Adicione um gasto fixo para organizar seus próximos vencimentos.");
   }
   function renderBudgets() {
     const month = monthKey(state.anchor);
@@ -665,19 +714,26 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
   }
   function renderGoals() {
     const target = document.querySelector("#goalsGrid");
-    target.innerHTML = state.goals.length ? state.goals.map(goal => { const percentage = Math.min(100, Math.round(goal.saved / goal.target * 100)); const id = escapeHTML(goal.id); return `<article class="goal-card"><div class="goal-head"><span class="goal-icon" style="background:${goal.color}18;color:${goal.color}">${icon("target")}</span><div class="goal-actions"><button class="edit-button" data-edit-goal="${id}" aria-label="Editar meta" title="Editar meta">${icon("edit")}</button><button class="delete-button" data-delete-goal="${id}" aria-label="Excluir meta" title="Excluir meta">${icon("trash")}</button></div></div><span class="goal-label">OBJETIVO</span><h2>${escapeHTML(goal.title)}</h2><div class="goal-values"><strong>${money.format(goal.saved)}</strong><span>de ${money.format(goal.target)}</span></div><div class="goal-progress"><span style="width:${percentage}%;background:${goal.color}"></span></div><div class="goal-foot"><b>${percentage}% concluído</b><small>Faltam ${money.format(Math.max(0, goal.target - goal.saved))}</small></div><form class="deposit-form" data-goal="${id}"><input type="number" min="0.01" step="0.01" required placeholder="Valor a adicionar" aria-label="Valor a adicionar ao total guardado"><button>Adicionar valor</button></form></article>`; }).join("") : `<article class="panel full-panel">${empty("Crie sua primeira meta", "Defina um valor e acompanhe os aportes ao longo do tempo.")}</article>`;
+    target.innerHTML = state.goals.length ? state.goals.map(goal => {
+      const percentage = Math.min(100, Math.round(goal.saved / goal.target * 100));
+      const id = escapeHTML(goal.id);
+      const contribution = goalMonthlyContribution(goal, new Date());
+      const plan = contribution === null ? "Defina um prazo para calcular seu aporte mensal." : goal.saved >= goal.target ? "Objetivo alcançado. Hora de comemorar!" : goal.deadline < toISO(new Date()) ? "O prazo passou. Edite a meta para planejar uma nova data." : `Guarde <b>${money.format(contribution)}/mês</b> até ${parseDate(goal.deadline).toLocaleDateString("pt-BR")} para chegar lá.`;
+      return `<article class="goal-card"><div class="goal-head"><span class="goal-icon" style="background:${goal.color}18;color:${goal.color}">${icon("target")}</span><div class="goal-actions"><button class="edit-button" data-edit-goal="${id}" aria-label="Editar meta" title="Editar meta">${icon("edit")}</button><button class="delete-button" data-delete-goal="${id}" aria-label="Excluir meta" title="Excluir meta">${icon("trash")}</button></div></div><span class="goal-label">OBJETIVO</span><h2>${escapeHTML(goal.title)}</h2><div class="goal-values"><strong>${money.format(goal.saved)}</strong><span>de ${money.format(goal.target)}</span></div><div class="goal-progress"><span style="width:${percentage}%;background:${goal.color}"></span></div><div class="goal-foot"><b>${percentage}% concluído</b><small>Faltam ${money.format(Math.max(0, goal.target - goal.saved))}</small></div><div class="goal-plan">${plan}</div><form class="deposit-form" data-goal="${id}"><input type="number" min="0.01" step="0.01" required placeholder="Valor a adicionar" aria-label="Valor a adicionar ao total guardado"><button>Adicionar valor</button></form></article>`;
+    }).join("") : `<article class="panel full-panel">${empty("Crie sua primeira meta", "Defina um valor, escolha um prazo e descubra quanto guardar por mês.")}</article>`;
   }
   function empty(text, detail = "Altere o período ou registre um novo lançamento.") { return `<div class="empty-state"><span>${icon("inbox")}</span><strong>${escapeHTML(text)}</strong><small>${escapeHTML(detail)}</small></div>`; }
 
   function activateView(view) {
+    document.querySelector(".workspace").classList.toggle("settings-open", view === "settings");
     document.querySelectorAll(".view").forEach(section => section.classList.toggle("active", section.id === `${view}View`));
-    document.querySelectorAll(".nav-item").forEach(button => button.classList.toggle("active", button.dataset.view === view));
+    document.querySelectorAll("[data-view]").forEach(button => { button.classList.toggle("active", button.dataset.view === view); button.setAttribute("aria-current", button.dataset.view === view ? "page" : "false"); });
   }
   function switchView(view) {
     state.view = view;
-    if (view === "budgets") state.period = "month";
+    if (["budgets", "recurring"].includes(view)) state.period = "month";
     activateView(view);
-    if (view === "budgets") render();
+    if (["budgets", "recurring"].includes(view)) render();
     document.querySelector("#sidebar").classList.remove("open");
     document.querySelector("#scrim").classList.remove("active");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -687,6 +743,7 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     const form = document.querySelector("#transactionForm");
     form.reset();
     form.dataset.editingId = "";
+    delete form.dataset.occurrence;
     form.elements.amount.setCustomValidity("");
     form.elements.amount.dataset.moneyFormatted = "";
     form.elements.date.value = toISO(new Date());
@@ -698,12 +755,13 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     setTimeout(() => form.elements.title.focus(), 50);
   }
   function editTransaction(id) {
-    const transaction = state.transactions.find(item => item.id === id);
+    const transaction = findRecurring(id);
     if (!transaction) { toast("Não foi possível encontrar este lançamento"); return; }
 
     const form = document.querySelector("#transactionForm");
     form.reset();
     form.dataset.editingId = transaction.id;
+    form.dataset.occurrence = transaction.virtual ? JSON.stringify(transaction) : "";
     form.elements.amount.setCustomValidity("");
     form.elements.title.value = transaction.title;
     form.elements.amount.value = formatMoneyValue(String(transaction.amount).replace(".", ","), true);
@@ -741,6 +799,7 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     const form = document.querySelector("#transactionForm");
     const isRecurringExpense = state.transactionType === "expense" && form.elements.recurring.checked;
     document.querySelector("#paidField").classList.toggle("hidden", !isRecurringExpense);
+    document.querySelector("#recurringHint").classList.toggle("hidden", !isRecurringExpense);
   }
   function openGoal() {
     const form = document.querySelector("#goalForm");
@@ -760,6 +819,7 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     form.elements.title.value = goal.title;
     form.elements.target.value = goal.target;
     form.elements.saved.value = goal.saved;
+    form.elements.deadline.value = goal.deadline || "";
     updateGoalModalHeading();
     document.querySelector("#goalModal").classList.remove("hidden");
     setTimeout(() => form.elements.title.focus(), 50);
@@ -838,8 +898,11 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
   }
   function applyTheme(theme) {
     const isDark = theme === "dark";
+    document.documentElement.classList.toggle("dark", isDark);
     document.querySelector("#app").classList.toggle("dark", isDark);
     document.body.classList.toggle("dark", isDark);
+    document.querySelector('meta[name="color-scheme"]').content = isDark ? "dark" : "light";
+    document.querySelector('meta[name="theme-color"]').content = isDark ? "#0c1c2a" : "#102f49";
     const button = document.querySelector("#themeBtn");
     button.setAttribute("aria-pressed", String(isDark));
     button.setAttribute("aria-label", isDark ? "Ativar tema claro" : "Ativar tema escuro");
@@ -853,7 +916,8 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
   }
   function recoveryBackup() {
     return {
-      version: 4,
+      version: 5,
+      profile: { ...state.profile },
       exportedAt: new Date().toISOString(),
       sourceOrigin: window.location.origin,
       vaultCode: syncRuntime.secret ? formatVaultSecret(syncRuntime.secret) : null,
@@ -868,7 +932,7 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
   }
   function exportCSV(items = filteredTransactions()) {
     if (!items.length) { toast("Nenhum lançamento para exportar. Ajuste o período ou os filtros."); return; }
-    download(csvBytes(items), `quanto-tem-lancamentos-${toISO(new Date())}.csv`, "text/csv;charset=utf-8");
+    download(csvBytes(items, { profileName: state.profile.name }), `quanto-tem-lancamentos-${toISO(new Date())}.csv`, "text/csv;charset=utf-8");
     toast(`${items.length} ${items.length === 1 ? "lançamento exportado" : "lançamentos exportados"} em CSV`);
   }
   let exportingPDF = false;
@@ -892,10 +956,23 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     const categories = data.getAll("categories");
     if (!categories.length) throw new Error("Selecione ao menos uma categoria.");
     const allCategories = categories.length === form.querySelectorAll('[name="categories"]').length;
-    const items = selectReportTransactions(state.transactions, { ...bounds, categories: allCategories ? null : categories, type: data.get("type"), includePending: data.get("includePending") === "on" });
+    const includePending = data.get("includePending") === "on";
+    const candidates = new Map(state.transactions.map(item => [item.id, item]));
+    if (includePending) {
+      const first = bounds.start?.slice(0, 7) || state.transactions.filter(item => item.recurring).map(item => item.date.slice(0, 7)).sort()[0] || monthKey(state.anchor);
+      const last = bounds.end?.slice(0, 7) || monthKey(new Date());
+      const cursor = parseDate(`${first}-01`);
+      let count = 0;
+      while (monthKey(cursor) <= last) {
+        if (++count > 1200) throw new Error("Para incluir contas pendentes, escolha um intervalo de até 100 anos.");
+        recurringForMonth(state.transactions, monthKey(cursor), state.tombstones).forEach(item => { if (!candidates.has(item.id)) candidates.set(item.id, item); });
+        cursor.setMonth(cursor.getMonth() + 1);
+      }
+    }
+    const items = selectReportTransactions([...candidates.values()], { ...bounds, categories: allCategories ? null : categories, type: data.get("type"), includePending });
     const categoryLabel = allCategories ? "Todas as categorias" : categories.length <= 3 ? categories.join(", ") : `${categories.length} categorias selecionadas`;
     const typeLabel = { all: "Entradas e despesas", income: "Somente entradas", expense: "Somente despesas" }[data.get("type")];
-    return { items, periodLabel: bounds.label, categoryLabel, typeLabel };
+    return { items, periodLabel: bounds.label, categoryLabel, typeLabel, profileName: state.profile.name };
   }
   function updateExportPreview() {
     const form = document.querySelector("#exportForm"); const period = form.elements.period.value;
@@ -924,7 +1001,9 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     const button = event.target.closest("button"); if (!button) return;
     if (button.dataset.view) switchView(button.dataset.view);
     if (button.dataset.goView) switchView(button.dataset.goView);
-    if (button.dataset.openTransaction) openTransaction(button.dataset.openTransaction);
+    if (button.dataset.openTransaction) { openTransaction(button.dataset.openTransaction); if (button.hasAttribute("data-new-recurring")) { const form = document.querySelector("#transactionForm"); form.elements.recurring.checked = true; form.elements.date.value = `${monthKey(state.anchor)}-${pad(Math.min(new Date().getDate(), new Date(state.anchor.getFullYear(), state.anchor.getMonth() + 1, 0).getDate()))}`; syncRecurringFields(); } }
+    if (button.dataset.pay) togglePayment(button.dataset.pay, true);
+    if (button.dataset.stopRecurring) { const root = state.transactions.find(item => item.id === button.dataset.stopRecurring); if (root) { root.recurrenceEnd = monthKey(state.anchor); root.updatedAt = nextTimestamp(); save(); render(); toast("Recorrência encerrada após este mês. O histórico foi mantido."); } }
     if (button.dataset.edit) editTransaction(button.dataset.edit);
     if (button.dataset.editGoal) editGoal(button.dataset.editGoal);
     if (button.dataset.editBudget) editBudget(button.dataset.editBudget);
@@ -967,21 +1046,20 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
       if (failed) { alert.textContent = message; alert.classList.remove("hidden"); }
     }
   });
+  function togglePayment(id, paid) {
+    const item = findRecurring(id);
+    if (!item) return;
+    const transaction = { ...item, paid, paidDate: paid ? (item.paid ? transactionDate(item) : toISO(new Date())) : null, updatedAt: nextTimestamp() };
+    delete transaction.virtual;
+    const index = state.transactions.findIndex(entry => entry.id === id);
+    if (index < 0) state.transactions.unshift(transaction); else state.transactions[index] = transaction;
+    if (paid) revealTransaction(transaction);
+    const persisted = save(); saveUI(); render();
+    toast(persisted ? paid ? "Pagamento confirmado e incluído no saldo" : "Pagamento desmarcado e removido do saldo" : "Pagamento atualizado nesta sessão. O navegador bloqueou o armazenamento local.");
+  }
   document.addEventListener("change", event => {
     if (event.target.matches("[data-toggle-paid]")) {
-      const index = state.transactions.findIndex(item => item.id === event.target.dataset.togglePaid && item.recurring && item.type === "expense");
-      if (index < 0) return;
-      const paid = event.target.checked;
-      const item = state.transactions[index];
-      const paidDate = paid ? (item.paid ? transactionDate(item) : toISO(new Date())) : null;
-      const transaction = { ...item, paid, paidDate, updatedAt: nextTimestamp() };
-      state.transactions[index] = transaction;
-      if (paid) revealTransaction(transaction);
-      const persisted = save();
-      saveUI();
-      render();
-      const message = paid ? "Pagamento confirmado e incluído no saldo" : "Pagamento desmarcado e removido do saldo";
-      toast(persisted ? message : "Pagamento atualizado nesta sessão. O navegador bloqueou o armazenamento local.");
+      togglePayment(event.target.dataset.togglePaid, event.target.checked);
     }
     if (event.target.id === "transactionTypeSelect") setTransactionType(event.target.value, document.querySelector("#categorySelect").value);
     if (event.target.matches("#transactionForm [name='recurring']")) syncRecurringFields();
@@ -991,6 +1069,19 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     if (event.target.matches("[data-range-end]")) { if (!event.target.value) { render(); return; } state.rangeEnd = event.target.value; if (state.rangeEnd < state.rangeStart) state.rangeStart = state.rangeEnd; render(); saveUI(); }
   });
   document.querySelector("#newCategoryName").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); createCategory(); } });
+  document.querySelector("#openProfile").addEventListener("click", () => {
+    document.querySelector("#profileForm").elements.name.value = state.profile.name;
+    document.querySelector("#profileModal").classList.remove("hidden");
+  });
+  document.querySelector("#profileForm").addEventListener("submit", event => {
+    event.preventDefault();
+    const name = normalizeProfileName(event.currentTarget.elements.name.value);
+    if (name === state.profile.name) { closeModals(); return; }
+    state.profile = { name, updatedAt: nextTimestamp() };
+    const persisted = save();
+    renderProfile(); closeModals();
+    toast(persisted ? "Perfil atualizado com sucesso" : "Perfil atualizado nesta sessão. O navegador bloqueou o armazenamento local.");
+  });
   document.querySelectorAll(".search-input").forEach(input => input.addEventListener("input", event => { state.search = event.target.value; document.querySelectorAll(".search-input").forEach(other => { if (other !== event.target) other.value = state.search; }); render(); saveUI(); }));
   document.querySelector("#transactionForm").addEventListener("submit", event => {
     event.preventDefault();
@@ -1011,12 +1102,14 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     const paid = recurring ? data.get("paid") === "on" : true;
     const editingId = form.dataset.editingId;
     const editingIndex = editingId ? state.transactions.findIndex(item => item.id === editingId) : -1;
-    if (editingId && editingIndex < 0) { closeModals(); toast("Não foi possível encontrar este lançamento"); return; }
-    const previous = editingIndex >= 0 ? state.transactions[editingIndex] : {};
+    const occurrence = form.dataset.occurrence ? JSON.parse(form.dataset.occurrence) : null;
+    if (editingId && editingIndex < 0 && occurrence?.id !== editingId) { closeModals(); toast("Não foi possível encontrar este lançamento"); return; }
+    const previous = editingIndex >= 0 ? state.transactions[editingIndex] : occurrence || {};
     const transaction = { ...previous, id: editingId || uid(), title: String(data.get("title") || "").trim(), amount, type, category: data.get("category"), date: data.get("date"), account: String(data.get("account") || "").trim(), note: String(data.get("note") || "").trim(), recurring, paid, updatedAt: nextTimestamp() };
     // A data exibida na edição de um gasto pago é a data do pagamento.
     if (recurring && previous.recurring && previous.paidDate) transaction.date = previous.date;
     transaction.paidDate = recurring && paid ? data.get("date") : null;
+    delete transaction.virtual;
     if (editingIndex >= 0) state.transactions[editingIndex] = transaction;
     else state.transactions.unshift(transaction);
     if (isPostedTransaction(transaction)) revealTransaction(transaction);
@@ -1043,7 +1136,7 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     const editingIndex = editingId ? state.goals.findIndex(goal => goal.id === editingId) : -1;
     if (editingId && editingIndex < 0) { closeModals(); toast("Não foi possível encontrar esta meta"); return; }
     const previous = editingIndex >= 0 ? state.goals[editingIndex] : {};
-    const goal = { ...previous, id: editingId || uid(), title: String(data.get("title") || "").trim(), target: Number(data.get("target")), saved: Number(data.get("saved") || 0), color: safeColor(previous.color, goalColors[state.goals.length % goalColors.length]), updatedAt: nextTimestamp() };
+    const goal = { ...previous, id: editingId || uid(), title: String(data.get("title") || "").trim(), target: Number(data.get("target")), saved: Number(data.get("saved") || 0), deadline: String(data.get("deadline") || ""), color: safeColor(previous.color, goalColors[state.goals.length % goalColors.length]), updatedAt: nextTimestamp() };
     if (editingIndex >= 0) state.goals[editingIndex] = goal;
     else state.goals.push(goal);
     save(); closeModals(); form.reset(); render(); toast(editingIndex >= 0 ? "Meta atualizada com sucesso" : "Meta criada com sucesso");
@@ -1105,8 +1198,17 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
       state.rangeStart = toISO(start); state.rangeEnd = toISO(end);
     } else if (state.period === "day") state.anchor.setDate(state.anchor.getDate() + direction);
     else if (state.period === "week") state.anchor.setDate(state.anchor.getDate() + direction * 7);
-    else if (state.period === "month") state.anchor.setMonth(state.anchor.getMonth() + direction);
-    else state.anchor.setFullYear(state.anchor.getFullYear() + direction);
+    else if (state.period === "month") {
+      const day = state.anchor.getDate();
+      state.anchor.setDate(1);
+      state.anchor.setMonth(state.anchor.getMonth() + direction);
+      state.anchor.setDate(Math.min(day, new Date(state.anchor.getFullYear(), state.anchor.getMonth() + 1, 0).getDate()));
+    } else {
+      const day = state.anchor.getDate(), month = state.anchor.getMonth();
+      state.anchor.setDate(1);
+      state.anchor.setFullYear(state.anchor.getFullYear() + direction);
+      state.anchor.setDate(Math.min(day, new Date(state.anchor.getFullYear(), month + 1, 0).getDate()));
+    }
     state.anchor = new Date(state.anchor); render(); saveUI();
   }
   document.querySelector("#themeBtn").addEventListener("click", () => {
@@ -1118,7 +1220,6 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
   ["#closeMenu", "#scrim"].forEach(selector => document.querySelector(selector).addEventListener("click", () => { document.querySelector("#sidebar").classList.remove("open"); document.querySelector("#scrim").classList.remove("active"); }));
   document.querySelector("#openGoal").addEventListener("click", openGoal);
   document.querySelector("#openBudget").addEventListener("click", openBudget);
-  document.querySelector("#openSync").addEventListener("click", () => { renderSyncUI(); document.querySelector("#syncModal").classList.remove("hidden"); });
   document.querySelector("#createVault").addEventListener("click", async () => {
     const secret = generateVaultSecret();
     syncRuntime.secret = secret;
@@ -1151,22 +1252,79 @@ import { reportBounds, selectReportTransactions, reportTotals, csvBytes, createR
     syncRuntime.secret = ""; syncRuntime.keys = null; syncRuntime.error = ""; syncRuntime.lastSynced = null; clearTimeout(syncRuntime.timer); storageRemove(SYNC_SECRET_KEY); renderSyncUI(); toast("Cofre desconectado deste navegador");
   });
   document.querySelectorAll(".modal-backdrop").forEach(modal => modal.addEventListener("mousedown", event => { if (event.target === modal) closeModals(); }));
-  document.addEventListener("keydown", event => { if (event.key === "Escape") closeModals(); });
+  let modalTrigger = null;
+  let activeModal = null;
+  document.addEventListener("click", event => { if (!activeModal) modalTrigger = event.target.closest("button") || document.activeElement; }, true);
+  const focusable = modal => [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]')].filter(element => element.getClientRects().length);
+  const modalObserver = new MutationObserver(() => {
+    const opened = document.querySelector(".modal-backdrop:not(.hidden)");
+    if (opened === activeModal) return;
+    const wasOpen = activeModal;
+    activeModal = opened;
+    document.querySelector("#app").inert = Boolean(opened);
+    document.querySelector(".mobile-nav").inert = Boolean(opened);
+    document.body.style.overflow = opened ? "hidden" : "";
+    if (opened) {
+      if (!wasOpen && !modalTrigger) modalTrigger = document.activeElement;
+      (opened.querySelector("input:not([type='checkbox']), select") || focusable(opened)[0])?.focus();
+    } else if (wasOpen) {
+      const target = modalTrigger?.isConnected && modalTrigger.getClientRects().length ? modalTrigger : document.querySelector("#themeBtn");
+      target?.focus(); modalTrigger = null;
+    }
+  });
+  document.querySelectorAll(".modal-backdrop").forEach(modal => modalObserver.observe(modal, { attributes: true, attributeFilter: ["class"] }));
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+      closeModals(); document.querySelector("#closeMenu").click();
+    }
+    if (event.key === "Tab" && activeModal) {
+      const items = focusable(activeModal), first = items[0], last = items.at(-1);
+      if (event.shiftKey && (document.activeElement === first || !activeModal.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || !activeModal.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
+    }
+  });
   document.querySelector("#backupBtn").addEventListener("click", () => { downloadRecoveryBackup(); toast(syncRuntime.secret ? "Backup com recuperação do cofre criado" : "Backup criado com sucesso"); });
   document.querySelector("#restoreBtn").addEventListener("click", () => document.querySelector("#restoreInput").click());
   document.querySelector("#restoreInput").addEventListener("change", event => {
-    const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = async () => { try { const data = JSON.parse(reader.result); if (!Array.isArray(data.transactions)) throw new Error(); const restoredSecret = normalizeVaultSecret(data.vaultCode || ""); ["transactions", "goals", "budgets", "categories"].forEach(collection => state[collection].forEach(item => recordDeletion(collection, item.id))); state.transactions = data.transactions.map(item => ({ ...item, id: typeof item.id === "string" && item.id ? item.id : uid(), updatedAt: nextTimestamp() })); state.goals = Array.isArray(data.goals) ? data.goals.map((goal, index) => ({ ...goal, id: typeof goal.id === "string" && goal.id ? goal.id : uid(), color: safeColor(goal.color, goalColors[index % goalColors.length]), updatedAt: nextTimestamp() })) : []; state.budgets = Array.isArray(data.budgets) ? data.budgets.map(budget => ({ ...budget, id: typeof budget.id === "string" && budget.id ? budget.id : uid(), updatedAt: nextTimestamp() })) : []; if (Array.isArray(data.categories)) { state.categories = data.categories.map((category, index) => ({ ...category, id: typeof category.id === "string" && category.id ? category.id : uid(), color: colors[category.name] || safeColor(category.color, customColors[index % customColors.length]), updatedAt: nextTimestamp() })); state.categories.forEach(category => { colors[category.name] = category.color || colors.Outros; }); } save(); render(); if (!restoredSecret) { toast("Dados restaurados com sucesso"); return; } syncRuntime.secret = restoredSecret; syncRuntime.keys = null; syncRuntime.error = ""; storageSet(SYNC_SECRET_KEY, restoredSecret); renderSyncUI(); try { await performSync({ secret: restoredSecret }); toast("Dados restaurados e cofre reconectado"); } catch { toast("Dados restaurados. Abra a sincronização para tentar conectar novamente"); } } catch { toast("Arquivo de backup inválido"); } }; reader.readAsText(file); event.target.value = "";
+    const file = event.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (!Array.isArray(data.transactions)) throw new Error();
+        const restoredSecret = normalizeVaultSecret(data.vaultCode || "");
+        ["transactions", "goals", "budgets", "categories"].forEach(collection => state[collection].forEach(item => recordDeletion(collection, item.id)));
+        state.transactions = data.transactions.map(item => ({ ...item, id: typeof item.id === "string" && item.id ? item.id : uid(), updatedAt: nextTimestamp() }));
+        state.goals = Array.isArray(data.goals) ? data.goals.map((goal, index) => ({ ...goal, id: typeof goal.id === "string" && goal.id ? goal.id : uid(), color: safeColor(goal.color, goalColors[index % goalColors.length]), updatedAt: nextTimestamp() })) : [];
+        state.budgets = Array.isArray(data.budgets) ? data.budgets.map(budget => ({ ...budget, id: typeof budget.id === "string" && budget.id ? budget.id : uid(), updatedAt: nextTimestamp() })) : [];
+        if (Array.isArray(data.categories)) {
+          state.categories = data.categories.map((category, index) => ({ ...category, id: typeof category.id === "string" && category.id ? category.id : uid(), color: colors[category.name] || safeColor(category.color, customColors[index % customColors.length]), updatedAt: nextTimestamp() }));
+          state.categories.forEach(category => { colors[category.name] = category.color || colors.Outros; });
+        }
+        // Backups anteriores ao perfil mantêm o nome atual deste navegador.
+        if (data.profile && typeof data.profile.name === "string") state.profile = { name: normalizeProfileName(data.profile.name), updatedAt: nextTimestamp() };
+        save(); render();
+        if (!restoredSecret) { toast("Dados restaurados com sucesso"); return; }
+        syncRuntime.secret = restoredSecret; syncRuntime.keys = null; syncRuntime.error = "";
+        storageSet(SYNC_SECRET_KEY, restoredSecret); renderSyncUI();
+        try { await performSync({ secret: restoredSecret }); toast("Dados restaurados e cofre reconectado"); }
+        catch { toast("Dados restaurados. Abra a sincronização para tentar conectar novamente"); }
+      } catch { toast("Arquivo de backup inválido"); }
+    };
+    reader.readAsText(file); event.target.value = "";
   });
   let scrollSaveTimer;
   window.addEventListener("scroll", () => { clearTimeout(scrollSaveTimer); scrollSaveTimer = setTimeout(() => saveUI(), 120); }, { passive: true });
   window.addEventListener("storage", event => {
-    if (![STORAGE_KEY, GOALS_KEY, CATEGORIES_KEY, BUDGETS_KEY, TOMBSTONES_KEY, SYNC_SECRET_KEY].includes(event.key)) return;
+    if (![STORAGE_KEY, GOALS_KEY, CATEGORIES_KEY, BUDGETS_KEY, PROFILE_KEY, TOMBSTONES_KEY, SYNC_SECRET_KEY].includes(event.key)) return;
     if (event.key === SYNC_SECRET_KEY) { syncRuntime.secret = normalizeVaultSecret(event.newValue || ""); syncRuntime.keys = null; renderSyncUI(); if (syncRuntime.secret) scheduleSync(100); return; }
     state.transactions = ensureArray(load(STORAGE_KEY, state.transactions), state.transactions);
     state.goals = ensureArray(load(GOALS_KEY, state.goals), state.goals);
     state.categories = ensureArray(load(CATEGORIES_KEY, state.categories), state.categories);
     state.budgets = ensureArray(load(BUDGETS_KEY, state.budgets), state.budgets);
     state.tombstones = ensureArray(load(TOMBSTONES_KEY, state.tombstones), state.tombstones);
+    state.profile = normalizeProfile(load(PROFILE_KEY, state.profile));
+    logicalTime = Math.max(logicalTime, state.profile.updatedAt);
     state.categories.forEach(category => { colors[category.name] = category.color || colors.Outros; });
     render();
   });

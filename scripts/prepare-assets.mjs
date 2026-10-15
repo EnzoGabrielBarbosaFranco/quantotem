@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const output = resolve(root, ".dist");
 const vendor = resolve(root, "vendor");
-const files = ["index.html", "style.css", "script.js", "reports.js", "favicon.svg", "quantotem-simbolo.svg", "manifest.webmanifest", "service-worker.js"];
+const files = ["index.html", "style.css", "script.js", "reports.js", "finance.js", "charts.js", "favicon.svg", "quantotem-simbolo.svg", "manifest.webmanifest", "service-worker.js"];
 const libraries = [
   ["jspdf/dist/jspdf.umd.min.js", "jspdf.umd.min.js"],
   ["jspdf-autotable/dist/jspdf.plugin.autotable.min.js", "jspdf.plugin.autotable.min.js"],

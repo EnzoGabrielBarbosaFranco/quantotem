@@ -6,8 +6,8 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#f4f8fb",
-  "theme_color": "#0b4f86",
+  "background_color": "#f5f7f9",
+  "theme_color": "#102f49",
   "icons": [
     { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
     { "src": "/quantotem-simbolo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }

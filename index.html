@@ -4,15 +4,56 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Controle financeiro pessoal, local-first e com sincronização criptografada opcional.">
-  <meta name="theme-color" content="#0b4f86">
+  <meta name="theme-color" content="#102f49">
+  <meta name="color-scheme" content="light dark">
+  <script>
+    // Restaurar o tema antes de carregar CSS e módulos evita o clarão no reload.
+    (() => {
+      let dark = false;
+      try { dark = localStorage.getItem("meu-dinheiro-static-theme") === "dark"; } catch {}
+      document.documentElement.classList.toggle("dark", dark);
+      document.querySelector('meta[name="color-scheme"]').content = dark ? "dark" : "light";
+      document.querySelector('meta[name="theme-color"]').content = dark ? "#0c1c2a" : "#102f49";
+    })();
+  </script>
+  <script>
+    // Preparar o perfil durante a leitura do HTML, sem esperar os módulos do app.
+    (() => {
+      let name = "";
+      try {
+        const profile = JSON.parse(localStorage.getItem("contaai-profile-v1") || "null");
+        if (typeof profile?.name === "string") name = profile.name.normalize("NFC").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+      } catch {}
+      if (!name) return;
+      document.documentElement.classList.add("profile-pending");
+      const parts = name.split(" ");
+      const initials = `${Array.from(parts[0])[0]}${parts.length > 1 ? Array.from(parts.at(-1))[0] : ""}`.toLocaleUpperCase("pt-BR");
+      const observer = new MutationObserver(() => {
+        const button = document.getElementById("openProfile");
+        const greeting = document.getElementById("dashboardGreeting");
+        if (!button || !greeting?.nextElementSibling) return;
+        observer.disconnect();
+        document.getElementById("profileName").textContent = name;
+        document.getElementById("profileInitials").textContent = initials;
+        document.getElementById("profileCaption").textContent = "Editar perfil";
+        button.setAttribute("aria-label", `Editar perfil de ${name}`);
+        button.title = name;
+        greeting.textContent = `Olá, ${name}`;
+        document.documentElement.classList.remove("profile-pending");
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+    })();
+  </script>
+  <style>
+    html { background: #f5f7f9; color-scheme: light; }
+    html.dark { background: #0c1c2a; color-scheme: dark; }
+    .profile-pending #openProfile, .profile-pending #dashboardGreeting { visibility: hidden; }
+  </style>
   <meta name="quanto-tem-sync-url" content="https://contaai.enzo-eleicoes-backend.workers.dev/api/sync">
   <title>Quanto Tem — Controle financeiro pessoal</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=5">
+  <link rel="stylesheet" href="style.css?v=9">
 </head>
 <body>
   <svg class="svg-sprite" aria-hidden="true">
@@ -44,11 +85,13 @@
     <symbol id="icon-budget" viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/><path d="m4 7 6-4 6 7 5-5"/></symbol>
     <symbol id="icon-cloud" viewBox="0 0 24 24"><path d="M7 18h11a4 4 0 0 0 .6-7.95A6.5 6.5 0 0 0 6.3 8.2 4.9 4.9 0 0 0 7 18Z"/><path d="m9 13 3-3 3 3M12 10v6"/></symbol>
     <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24"><path d="m9.5 3-.6 2.4-2 .9-2.3-.7L2.1 10l1.8 1.7v2.2L2.1 15.6 4.6 20l2.3-.7 2 .9.6 2.3h5l.6-2.3 2-.9 2.3.7 2.5-4.4-1.8-1.7v-2.2L21.9 10l-2.5-4.4-2.3.7-2-.9-.6-2.4z"/><circle cx="12" cy="12.7" r="3"/></symbol>
   </svg>
   <main class="app" id="app">
     <aside class="sidebar" id="sidebar">
       <button class="mobile-close" id="closeMenu" aria-label="Fechar menu"><svg class="icon"><use href="#icon-close"></use></svg></button>
       <div class="brand"><span class="brand-mark"><img src="quantotem-simbolo.svg" alt="" width="38" height="38"></span><span>Quanto <strong>Tem</strong></span></div>
+      <button class="profile-card" id="openProfile" aria-label="Adicionar seu nome ao perfil"><span class="profile-avatar" id="profileInitials" aria-hidden="true">QT</span><span class="profile-copy"><strong id="profileName">Seu perfil</strong><small id="profileCaption">Adicionar seu nome</small></span><svg class="icon" aria-hidden="true"><use href="#icon-edit"></use></svg></button>
       <nav aria-label="Navegação principal">
         <p class="nav-label">MENU</p>
         <button class="nav-item active" data-view="dashboard"><span><svg class="icon"><use href="#icon-dashboard"></use></svg></span>Visão geral</button>
@@ -57,29 +100,21 @@
         <button class="nav-item" data-view="budgets"><span><svg class="icon"><use href="#icon-budget"></use></svg></span>Orçamentos</button>
         <button class="nav-item" data-view="goals"><span><svg class="icon"><use href="#icon-target"></use></svg></span>Minhas metas</button>
       </nav>
-      <div class="sidebar-tip">
-        <span class="sync-mark"><svg class="icon"><use href="#icon-cloud"></use></svg><i id="syncDot"></i></span><strong id="syncSidebarTitle">Dados neste navegador</strong>
-        <p id="syncSidebarText">Ative o cofre para usar os mesmos dados nos seus outros navegadores.</p>
-        <button class="sync-cta" id="openSync"><svg class="icon"><use href="#icon-cloud"></use></svg><span>Ativar sincronização</span></button>
-        <div class="backup-section">
-          <span class="backup-label">BACKUP LOCAL</span>
-          <div class="backup-actions"><button id="backupBtn" title="Baixar arquivo de backup"><svg class="icon"><use href="#icon-download"></use></svg><span>Baixar</span></button><button id="restoreBtn" title="Restaurar um arquivo de backup"><svg class="icon"><use href="#icon-upload"></use></svg><span>Restaurar</span></button></div>
-        </div>
-        <input type="file" id="restoreInput" accept="application/json" hidden>
-      </div>
+      <nav class="settings-nav" aria-label="Preferências"><button class="nav-item" id="openSettings" data-view="settings"><span><svg class="icon"><use href="#icon-settings"></use></svg></span>Configurações</button></nav>
     </aside>
 
     <button class="scrim" id="scrim" aria-label="Fechar menu"></button>
 
     <section class="workspace">
       <header class="topbar">
+        <span class="topbar-section">Preferências do aplicativo</span>
         <button class="hamburger" id="openMenu" aria-label="Abrir menu"><svg class="icon"><use href="#icon-menu"></use></svg></button>
         <div class="mobile-brand" aria-label="Quanto Tem"><img src="quantotem-simbolo.svg" alt="" width="32" height="32"><span>Quanto <strong>Tem</strong></span></div>
         <div class="period-control">
           <button id="prevPeriod" aria-label="Período anterior"><svg class="icon"><use href="#icon-chevron-left"></use></svg></button>
           <div><span id="periodEyebrow">PERÍODO ATUAL</span><strong id="periodLabel">—</strong></div>
           <button id="nextPeriod" aria-label="Próximo período"><svg class="icon"><use href="#icon-chevron-right"></use></svg></button>
-          <button class="today-button hidden" id="goToday" title="Voltar para hoje">Voltar para dia de hoje</button>
+          <button class="today-button hidden" id="goToday" title="Voltar para hoje">Hoje</button>
         </div>
         <div class="top-actions"><button class="icon-button" id="themeBtn" aria-label="Ativar tema escuro" aria-pressed="false"><svg class="icon"><use href="#icon-moon"></use></svg></button><button class="primary-btn" data-open-transaction="expense"><svg class="icon"><use href="#icon-plus"></use></svg>Novo lançamento</button></div>
       </header>
@@ -87,29 +122,35 @@
       <div class="content">
         <section id="dashboardView" class="view active">
           <div class="welcome">
-            <div><span class="eyebrow">PAINEL FINANCEIRO</span><h1>Visão geral</h1><p>Entradas, despesas e objetivos reunidos em um só lugar.</p></div>
+            <div><span class="eyebrow" id="dashboardGreeting">SEU DINHEIRO, COM CLAREZA</span><h1>Seu mês em perspectiva<span class="heading-dot">.</span></h1><p>Saiba onde você está. Planeje o próximo passo.</p></div>
             <div class="quick-actions"><button class="income-btn" data-open-transaction="income"><svg class="icon"><use href="#icon-plus"></use></svg>Registrar entrada</button><button class="expense-btn" data-open-transaction="expense"><svg class="icon"><use href="#icon-minus"></use></svg>Registrar despesa</button></div>
           </div>
           <div class="period-tabs period-tabs-slot"></div>
           <div class="date-range-slot"></div>
           <section class="summary-grid summary-slot"></section>
+          <section id="gettingStarted" class="getting-started hidden" aria-label="Primeiros passos"></section>
+          <section class="planning-grid">
+            <article class="panel agenda-panel"><div class="panel-head"><div><span class="eyebrow">NO SEU RADAR</span><h2>Contas do mês</h2></div><button class="text-button" data-go-view="recurring">Ver todas <svg class="icon"><use href="#icon-arrow-right"></use></svg></button></div><div id="upcomingBills"></div></article>
+            <article class="forecast-panel" id="forecastPanel" aria-label="Saldo após compromissos"></article>
+          </section>
+          <section class="lower-grid">
+            <article class="panel transactions-panel">
+              <div class="panel-head"><div><span class="eyebrow">ÚLTIMAS ATIVIDADES</span><h2>Lançamentos recentes</h2></div><button class="text-button" data-go-view="transactions">Ver todos <svg class="icon"><use href="#icon-arrow-right"></use></svg></button></div>
+              <div class="mini-search"><span><svg class="icon"><use href="#icon-search"></use></svg></span><input class="search-input" aria-label="Buscar lançamentos recentes" placeholder="Buscar lançamento..."></div>
+              <div class="transaction-list" id="recentTransactions"></div>
+            </article>
+            <article class="insights-panel" id="insightsPanel"></article>
+          </section>
           <section class="dashboard-grid">
             <article class="panel monthly-chart">
-              <div class="panel-head"><div><span class="eyebrow">ÚLTIMOS 6 MESES</span><h2>Entradas e despesas</h2></div><div class="legend"><span><i class="dot income-dot"></i>Entradas</span><span><i class="dot expense-dot"></i>Despesas</span></div></div>
+              <div class="panel-head"><div><span class="eyebrow">EVOLUÇÃO EM 6 MESES</span><h2>Entradas e despesas</h2></div><div class="legend"><span><i class="dot income-dot"></i>Entradas</span><span><i class="dot expense-dot"></i>Despesas</span></div></div>
               <div class="chart-area" id="monthlyChart"></div>
+              <p class="chart-hint">Passe o mouse, toque ou use as setas para explorar os valores.</p>
             </article>
             <article class="panel category-chart">
               <div class="panel-head"><div><span class="eyebrow">DISTRIBUIÇÃO DO PERÍODO</span><h2>Despesas por categoria</h2></div></div>
               <div id="categoryChart"></div>
             </article>
-          </section>
-          <section class="lower-grid">
-            <article class="panel transactions-panel">
-              <div class="panel-head"><div><span class="eyebrow">MOVIMENTAÇÕES</span><h2>Lançamentos recentes</h2></div><button class="text-button" data-go-view="transactions">Ver todos ›</button></div>
-              <div class="mini-search"><span><svg class="icon"><use href="#icon-search"></use></svg></span><input class="search-input" placeholder="Buscar lançamento..."></div>
-              <div class="transaction-list" id="recentTransactions"></div>
-            </article>
-            <article class="insights-panel" id="insightsPanel"></article>
           </section>
         </section>
 
@@ -122,7 +163,7 @@
         </section>
 
         <section id="recurringView" class="view">
-          <div class="welcome page-heading"><div><span class="eyebrow">PREVISIBILIDADE MENSAL</span><h1>Gastos fixos</h1><p>Acompanhe compromissos recorrentes e o que ainda falta pagar.</p></div><button class="primary-btn" data-open-transaction="expense"><svg class="icon"><use href="#icon-plus"></use></svg>Adicionar gasto fixo</button></div>
+          <div class="welcome page-heading"><div><span class="eyebrow">PREVISIBILIDADE MENSAL</span><h1>Gastos fixos</h1><p>Cada mês, seu próprio controle. Pagamentos anteriores ficam no histórico.</p></div><button class="primary-btn" data-open-transaction="expense" data-new-recurring><svg class="icon"><use href="#icon-plus"></use></svg>Adicionar gasto fixo</button></div>
           <section class="fixed-summary" id="fixedSummary"></section>
           <article class="panel full-panel"><div class="panel-head"><div><span class="eyebrow">RECORRÊNCIAS DO MÊS</span><h2>Contas e assinaturas</h2></div></div><div class="recurring-grid" id="recurringGrid"></div></article>
         </section>
@@ -137,12 +178,56 @@
           <div class="welcome page-heading"><div><span class="eyebrow">PLANEJAMENTO</span><h1>Minhas metas</h1><p>Defina objetivos e acompanhe os aportes ao longo do tempo.</p></div><button class="primary-btn" id="openGoal"><svg class="icon"><use href="#icon-plus"></use></svg>Nova meta</button></div>
           <section class="goals-grid" id="goalsGrid"></section>
         </section>
+
+        <section id="settingsView" class="view" aria-labelledby="settingsTitle">
+          <div class="welcome page-heading"><div><span class="eyebrow">DO SEU JEITO</span><h1 id="settingsTitle">Configurações</h1><p>Gerencie a sincronização e cuide dos seus dados.</p></div></div>
+          <div class="settings-grid">
+            <article class="panel settings-vault">
+              <div class="settings-card-heading"><span class="settings-icon"><svg class="icon"><use href="#icon-cloud"></use></svg></span><div><h2>Cofre e sincronização</h2><p>Seus dados disponíveis nos seus outros dispositivos.</p></div></div>
+              <div class="settings-sync-status" role="status"><span class="sync-mark" aria-hidden="true"><i id="syncDot"></i></span><span id="syncConnectionLabel">Somente neste navegador</span></div>
+              <div id="syncDisconnected" class="sync-pane">
+                <div class="privacy-note"><span><svg class="icon"><use href="#icon-shield"></use></svg></span><div><strong>Seus dados saem daqui criptografados</strong><p>O servidor guarda somente um pacote ilegível. O código do cofre é a chave e não pode ser recuperado.</p></div></div>
+                <button class="primary-btn sync-main-action" id="createVault"><svg class="icon"><use href="#icon-plus"></use></svg>Criar cofre com meus dados</button>
+                <div class="sync-divider"><span>ou conecte um cofre existente</span></div>
+                <form id="connectVaultForm" class="sync-connect-form"><label>Código do cofre<input name="secret" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" required></label><button class="secondary-btn">Conectar este navegador</button></form>
+              </div>
+              <div id="syncConnected" class="sync-pane hidden">
+                <div class="sync-status-card"><span class="sync-status-icon"><svg class="icon"><use href="#icon-cloud"></use></svg></span><div><strong id="syncStatusTitle">Cofre conectado</strong><p id="syncStatusText">Preparando a primeira sincronização…</p></div></div>
+                <div class="vault-code-label">Código do seu cofre<small>Guarde-o em local seguro. Uma mudança no endereço do site cria um novo armazenamento no navegador.</small></div>
+                <div class="vault-code"><code id="vaultCode"></code><button id="copyVaultCode" aria-label="Copiar código" title="Copiar código"><svg class="icon"><use href="#icon-copy"></use></svg></button></div>
+                <div class="sync-actions"><button class="secondary-btn recovery-action" id="downloadRecovery"><svg class="icon"><use href="#icon-download"></use></svg>Baixar arquivo de recuperação</button><button class="primary-btn" id="syncNow">Sincronizar agora</button><button class="secondary-btn" id="disconnectVault">Desconectar</button></div>
+              </div>
+            </article>
+            <article class="panel settings-backup">
+              <div class="settings-card-heading"><span class="settings-icon"><svg class="icon"><use href="#icon-download"></use></svg></span><div><h2>Backup e restauração</h2><p>Uma cópia dos seus dados, sempre com você.</p></div></div>
+              <p class="settings-description">Baixe um arquivo com seus lançamentos, metas, orçamentos, categorias e perfil. Se houver um cofre conectado, o backup também inclui o código de recuperação.</p>
+              <div class="settings-backup-actions"><button class="secondary-btn" id="backupBtn"><svg class="icon"><use href="#icon-download"></use></svg>Baixar backup</button><button class="secondary-btn" id="restoreBtn"><svg class="icon"><use href="#icon-upload"></use></svg>Restaurar backup</button></div>
+              <p class="settings-note">Guarde esse arquivo em um local seguro. Ao restaurar, os dados atuais são substituídos pelos dados do arquivo.</p>
+              <input type="file" id="restoreInput" accept="application/json" hidden>
+            </article>
+          </div>
+        </section>
       </div>
     </section>
   </main>
 
+  <nav class="mobile-nav" aria-label="Navegação rápida">
+    <button class="active" data-view="dashboard"><svg class="icon"><use href="#icon-dashboard"></use></svg><span>Início</span></button>
+    <button data-view="transactions"><svg class="icon"><use href="#icon-receipt"></use></svg><span>Histórico</span></button>
+    <button class="mobile-add" data-open-transaction="expense" aria-label="Novo lançamento"><svg class="icon"><use href="#icon-plus"></use></svg></button>
+    <button data-view="recurring"><svg class="icon"><use href="#icon-repeat"></use></svg><span>Contas</span></button>
+    <button data-view="goals"><svg class="icon"><use href="#icon-target"></use></svg><span>Metas</span></button>
+  </nav>
+
+  <div class="modal-backdrop hidden" id="profileModal">
+    <div class="modal small-modal" role="dialog" aria-modal="true" aria-labelledby="profileModalTitle">
+      <div class="modal-head"><div><span class="eyebrow">DO SEU JEITO</span><h2 id="profileModalTitle">Meu perfil</h2></div><button class="close-modal" aria-label="Fechar"><svg class="icon"><use href="#icon-close"></use></svg></button></div>
+      <form id="profileForm"><label class="full">Seu nome<input name="name" maxlength="80" autocomplete="name" placeholder="Ex.: Enzo Almeida" aria-describedby="profileHint"></label><p class="form-hint full" id="profileHint">Seu nome aparece no painel e identifica os relatórios PDF e CSV. Deixe vazio para remover o nome.</p><div class="modal-actions full"><button type="button" class="secondary-btn close-modal">Cancelar</button><button class="primary-btn">Salvar perfil</button></div></form>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="transactionModal">
-    <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="transactionModalTitle">
       <div class="modal-head"><div><span class="eyebrow" id="transactionModalEyebrow">NOVO LANÇAMENTO</span><h2 id="transactionModalTitle">Registrar despesa</h2></div><button class="close-modal" aria-label="Fechar"><svg class="icon"><use href="#icon-close"></use></svg></button></div>
       <form id="transactionForm">
         <label class="full">Descrição<input name="title" required placeholder="Ex.: Supermercado, salário"></label>
@@ -155,6 +240,7 @@
         <label class="full">Observação <small>(opcional)</small><textarea name="note" placeholder="Adicione um detalhe para lembrar depois"></textarea></label>
         <label class="checkbox full" id="fixedField"><input type="checkbox" name="recurring"><span><b>Este é um gasto fixo</b><small>Será identificado como compromisso mensal.</small></span></label>
         <label class="checkbox full hidden" id="paidField"><input type="checkbox" name="paid"><span><b>Este gasto já foi pago</b><small>O status também aparecerá na área de gastos fixos.</small></span></label>
+        <p class="form-hint full hidden" id="recurringHint">Uma conta pendente será criada a cada mês, no mesmo dia. Nos meses mais curtos, usamos o último dia. Ao editar uma parcela futura, a mudança vale só para aquele mês.</p>
         <div class="modal-actions full"><button type="button" class="secondary-btn close-modal">Cancelar</button><button class="primary-btn" id="transactionSubmit">Salvar lançamento</button></div>
       </form>
     </div>
@@ -164,6 +250,7 @@
     <div class="modal export-modal" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
       <div class="modal-head"><div><span class="eyebrow">SEU RELATÓRIO FINANCEIRO</span><h2 id="exportModalTitle">Exportar lançamentos</h2></div><button class="close-modal" aria-label="Fechar"><svg class="icon"><use href="#icon-close"></use></svg></button></div>
       <p class="export-intro">Escolha o período e as categorias. O PDF reúne os totais e todos os lançamentos selecionados, em ordem de data.</p>
+      <p class="export-profile" id="exportProfile"></p>
       <form id="exportForm">
         <label>Período<select name="period" id="exportPeriod"><option value="all">Todos os lançamentos</option><option value="day">Dia</option><option value="week">Semana</option><option value="month">Mês</option><option value="year">Ano</option><option value="range">Intervalo de datas</option></select></label>
         <label>Tipo<select name="type"><option value="all">Entradas e despesas</option><option value="income">Somente entradas</option><option value="expense">Somente despesas</option></select></label>
@@ -181,8 +268,8 @@
   </div>
 
   <div class="modal-backdrop hidden" id="goalModal">
-    <div class="modal small-modal"><div class="modal-head"><div><span class="eyebrow" id="goalModalEyebrow">NOVO OBJETIVO</span><h2 id="goalModalTitle">Crie uma meta</h2></div><button class="close-modal" aria-label="Fechar"><svg class="icon"><use href="#icon-close"></use></svg></button></div>
-      <form id="goalForm"><label class="full">Nome da meta<input name="title" required placeholder="Ex.: Comprar um notebook"></label><label>Valor desejado<input name="target" type="number" min="0.01" step="0.01" required></label><label>Já tenho guardado<input name="saved" type="number" min="0" step="0.01" value="0"></label><div class="modal-actions full"><button type="button" class="secondary-btn close-modal">Cancelar</button><button class="primary-btn" id="goalSubmit">Criar meta</button></div></form>
+    <div class="modal small-modal" role="dialog" aria-modal="true" aria-labelledby="goalModalTitle"><div class="modal-head"><div><span class="eyebrow" id="goalModalEyebrow">NOVO OBJETIVO</span><h2 id="goalModalTitle">Crie uma meta</h2></div><button class="close-modal" aria-label="Fechar"><svg class="icon"><use href="#icon-close"></use></svg></button></div>
+      <form id="goalForm"><label class="full">Nome da meta<input name="title" required placeholder="Ex.: Comprar um notebook"></label><label>Valor desejado<input name="target" type="number" min="0.01" step="0.01" required></label><label>Já tenho guardado<input name="saved" type="number" min="0" step="0.01" value="0"></label><label class="full">Quero alcançar até <small>(opcional)</small><input name="deadline" type="date"></label><div class="modal-actions full"><button type="button" class="secondary-btn close-modal">Cancelar</button><button class="primary-btn" id="goalSubmit">Criar meta</button></div></form>
     </div>
   </div>
 
@@ -193,25 +280,7 @@
     </div>
   </div>
 
-  <div class="modal-backdrop hidden" id="syncModal">
-    <div class="modal sync-modal" role="dialog" aria-modal="true" aria-labelledby="syncModalTitle">
-      <div class="modal-head"><div><span class="eyebrow">COFRE CRIPTOGRAFADO</span><h2 id="syncModalTitle">Sincronizar dispositivos</h2></div><button class="close-modal" aria-label="Fechar"><svg class="icon"><use href="#icon-close"></use></svg></button></div>
-      <div id="syncDisconnected" class="sync-pane">
-        <div class="privacy-note"><span><svg class="icon"><use href="#icon-shield"></use></svg></span><div><strong>Seus dados saem daqui criptografados</strong><p>O servidor guarda somente um pacote ilegível. O código do cofre é a chave e não pode ser recuperado.</p></div></div>
-        <button class="primary-btn sync-main-action" id="createVault">Criar cofre com meus dados</button>
-        <div class="sync-divider"><span>ou conecte um cofre existente</span></div>
-        <form id="connectVaultForm" class="sync-connect-form"><label>Código do cofre<input name="secret" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" required></label><button class="secondary-btn">Conectar este navegador</button></form>
-      </div>
-      <div id="syncConnected" class="sync-pane hidden">
-        <div class="sync-status-card"><span class="sync-status-icon"><svg class="icon"><use href="#icon-cloud"></use></svg></span><div><strong id="syncStatusTitle">Cofre conectado</strong><p id="syncStatusText">Preparando a primeira sincronização…</p></div></div>
-        <label class="vault-code-label">Código do seu cofre<small>Guarde-o em local seguro. Uma mudança no endereço do site cria um novo armazenamento no navegador.</small></label>
-        <div class="vault-code"><code id="vaultCode"></code><button id="copyVaultCode" aria-label="Copiar código" title="Copiar código"><svg class="icon"><use href="#icon-copy"></use></svg></button></div>
-        <div class="sync-actions"><button class="secondary-btn recovery-action" id="downloadRecovery"><svg class="icon"><use href="#icon-download"></use></svg>Baixar arquivo de recuperação</button><button class="primary-btn" id="syncNow">Sincronizar agora</button><button class="secondary-btn" id="disconnectVault">Desconectar</button></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="toast hidden" id="toast"></div>
-  <script type="module" src="script.js?v=6"></script>
+  <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="script.js?v=11"></script>
 </body>
 </html>

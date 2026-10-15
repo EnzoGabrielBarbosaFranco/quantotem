@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
@@ -62,8 +62,17 @@ async function connectDevTools(debugPort) {
     return result.result.value;
   };
   await command("Runtime.enable");
-  await retry(async () => { if (!await evaluate("document.readyState === 'complete' && Boolean(document.querySelector('#openSync'))")) throw new Error("App ainda não abriu"); });
-  return { evaluate, exceptions, close: () => socket.close() };
+  await retry(async () => { if (!await evaluate("document.readyState === 'complete' && Boolean(document.querySelector('#openSettings'))")) throw new Error("App ainda não abriu"); });
+  if (await evaluate("['localhost','127.0.0.1'].includes(location.hostname)")) {
+    // O HTML pode apontar para um cofre hospedado. Este teste usa somente o Worker local.
+    await command("Network.enable");
+    await command("Network.setBlockedURLs", { urls: ["https://*"] });
+    await command("Page.enable");
+    const localSync = `document.querySelector('meta[name="quanto-tem-sync-url"]').content = '/api/sync';`;
+    await command("Page.addScriptToEvaluateOnNewDocument", { source: `document.addEventListener('DOMContentLoaded', () => { ${localSync} });` });
+    await evaluate(localSync);
+  }
+  return { command, evaluate, exceptions, close: () => socket.close() };
 }
 async function openBrowser(appUrl) {
   const profile = await mkdtemp(resolve(tmpdir(), "quanto-tem-sync-browser-"));
@@ -80,13 +89,20 @@ async function closeBrowser(target) {
 
 const externalAppUrl = process.env.CONTA_AI_APP_URL || process.argv.find(argument => argument.startsWith("--url="))?.slice(6);
 let worker = null;
+let workerState = null;
+let originalTestHTML = null;
 let appUrl;
 if (externalAppUrl) appUrl = `${externalAppUrl.replace(/\/$/, "")}/`;
 else {
   await import("../scripts/prepare-assets.mjs");
+  // Só o artefato temporário do teste aponta à API local; o HTML do projeto é preservado.
+  const testHTML = resolve(projectRoot, ".dist", "index.html");
+  originalTestHTML = await readFile(testHTML, "utf8");
+  await writeFile(testHTML, originalTestHTML.replace(/(<meta name="quanto-tem-sync-url" content=")[^"]+/, '$1/api/sync'));
   const workerPort = await availablePort();
   const wranglerBin = resolve(projectRoot, "node_modules", "wrangler", "bin", "wrangler.js");
-  worker = spawn(process.execPath, [wranglerBin, "dev", "--port", String(workerPort)], { cwd: projectRoot, stdio: "ignore", windowsHide: true });
+  workerState = await mkdtemp(resolve(tmpdir(), "quanto-tem-worker-test-"));
+  worker = spawn(process.execPath, [wranglerBin, "dev", "--local", "--port", String(workerPort), "--persist-to", workerState], { cwd: projectRoot, stdio: "ignore", windowsHide: true, env: { ...process.env, WRANGLER_SEND_METRICS: "false" } });
   appUrl = `http://127.0.0.1:${workerPort}/`;
 }
 let first;
@@ -95,16 +111,20 @@ let second;
 try {
   await retry(async () => { const response = await fetch(`${appUrl}api/sync`); if (!response.ok || response.headers.get("x-contaai-sync") !== "1") throw new Error("Worker ainda não iniciou"); }, 30000);
   first = await openBrowser(appUrl);
+  const firstNavigation = await first.devTools.evaluate("performance.timeOrigin");
   await first.devTools.evaluate("localStorage.clear(); location.reload(); true").catch(() => {});
-  await retry(async () => { if (!await first.devTools.evaluate("document.readyState === 'complete' && Boolean(document.querySelector('#createVault'))")) throw new Error("Primeiro navegador recarregando"); });
-  await first.devTools.evaluate("document.querySelector('#openSync').click(); document.querySelector('#createVault').click(); true");
+  await retry(async () => { if (!await first.devTools.evaluate(`performance.timeOrigin !== ${firstNavigation} && document.readyState === 'complete' && Boolean(document.querySelector('#createVault'))`)) throw new Error("Primeiro navegador recarregando"); });
+  await first.devTools.evaluate("document.querySelector('#openSettings').click(); document.querySelector('#createVault').click(); true");
   const secret = await retry(async () => {
-    const result = await first.devTools.evaluate(`({ secret: localStorage.getItem('contaai-sync-secret-v1'), connected: document.querySelector('#syncDot').classList.contains('connected') })`);
-    if (!result.secret || !result.connected) throw new Error("Cofre ainda não foi criado");
+    const result = await first.devTools.evaluate(`({ secret: localStorage.getItem('contaai-sync-secret-v1'), connected: document.querySelector('#syncDot').classList.contains('connected'), message: document.querySelector('#toast').textContent, endpoint: document.querySelector('meta[name="quanto-tem-sync-url"]').content })`);
+    if (!result.secret || !result.connected) throw new Error(`Cofre ainda não foi criado: ${result.message}; endpoint: ${result.endpoint}`);
     return result.secret;
   });
   await first.devTools.evaluate(`(() => {
-    document.querySelector('#syncModal .close-modal').click();
+    document.querySelector('[data-view=dashboard]').click();
+    document.querySelector('#openProfile').click();
+    document.querySelector('#profileForm').elements.name.value = 'João da Conceição';
+    document.querySelector('#profileForm').requestSubmit();
     document.querySelector('[data-open-transaction="income"]').click();
     const form = document.querySelector('#transactionForm');
     form.elements.title.value = 'Compartilhado entre navegadores';
@@ -112,7 +132,7 @@ try {
     form.elements.date.value = new Date().toLocaleDateString('sv-SE');
     form.elements.account.value = 'Conta sincronizada';
     form.requestSubmit();
-    document.querySelector('#openSync').click();
+    document.querySelector('#openSettings').click();
     document.querySelector('#syncNow').click();
     return true;
   })()`);
@@ -135,6 +155,7 @@ try {
   })()`);
   const recovery = JSON.parse(recoveryText);
   assert(recovery.vaultCode?.replace(/-/g, "") === secret && recovery.transactions.some(item => item.title === "Compartilhado entre navegadores"), "O arquivo de recuperação não preservou o cofre e os dados");
+  assert(recovery.profile?.name === 'João da Conceição', "O backup não incluiu o perfil");
 
   second = await openBrowser(appUrl);
   await second.devTools.evaluate(`(() => {
@@ -150,12 +171,16 @@ try {
     const result = await second.devTools.evaluate(`({ connected: document.querySelector('#syncDot').classList.contains('connected'), text: document.querySelector('#allTransactions').textContent })`);
     if (!result.connected || !result.text.includes("Compartilhado entre navegadores")) throw new Error("Dados ainda não chegaram ao segundo navegador");
   });
+  assert(await second.devTools.evaluate("document.querySelector('#profileName').textContent === 'João da Conceição'"), "O perfil não foi restaurado com o backup");
 
   await second.devTools.evaluate(`(() => {
-    document.querySelector('#syncModal .close-modal').click();
+    document.querySelector('[data-view=dashboard]').click();
+    document.querySelector('#openProfile').click();
+    document.querySelector('#profileForm').elements.name.value = 'Maria de Souza';
+    document.querySelector('#profileForm').requestSubmit();
     const saved = JSON.parse(localStorage.getItem('contaai-transactions-v2'));
     document.querySelector('[data-delete="' + saved[0].id + '"]').click();
-    document.querySelector('#openSync').click();
+    document.querySelector('#openSettings').click();
     document.querySelector('#syncNow').click();
     return true;
   })()`);
@@ -165,14 +190,34 @@ try {
     const count = await first.devTools.evaluate("JSON.parse(localStorage.getItem('contaai-transactions-v2') || '[]').length");
     if (count !== 0) throw new Error("Exclusão ainda não chegou ao primeiro navegador");
   });
+  await retry(async () => {
+    if (!await first.devTools.evaluate("document.querySelector('#profileName').textContent === 'Maria de Souza'")) throw new Error("O nome atualizado não chegou ao primeiro navegador");
+  });
+  await second.devTools.evaluate(`document.querySelector('[data-view=dashboard]').click(); document.querySelector('#openProfile').click(); document.querySelector('#profileForm').elements.name.value=''; document.querySelector('#profileForm').requestSubmit(); document.querySelector('#openSettings').click(); document.querySelector('#syncNow').click(); true`);
+  await retry(async () => { if (!await second.devTools.evaluate("document.querySelector('#syncDot').classList.contains('connected')")) throw new Error("Remoção do nome ainda não sincronizou"); });
+  await first.devTools.evaluate("document.querySelector('#syncNow').click();true");
+  await retry(async () => { if (!await first.devTools.evaluate("JSON.parse(localStorage.getItem('contaai-profile-v1')).name === ''")) throw new Error("O nome removido reapareceu na sincronização"); });
   assert(first.devTools.exceptions.length === 0 && second.devTools.exceptions.length === 0, `Erros de JavaScript: ${[...first.devTools.exceptions, ...second.devTools.exceptions].join(" | ")}`);
-  process.stdout.write("✓ Navegadores: criação, conexão, envio e exclusão sincronizados\n");
+  process.stdout.write("✓ Navegadores: dados e perfil sincronizados, backup restaurado e remoção do nome preservada\n");
+  await first.devTools.evaluate(`document.querySelector('#openProfile').click(); document.querySelector('#profileForm').elements.name.value='João da Conceição'; document.querySelector('#profileForm').requestSubmit(); true`);
+  const offlineReady = await first.devTools.evaluate(`Promise.race([navigator.serviceWorker.ready.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 10000))])`);
+  assert(offlineReady, "O cache offline não ficou pronto");
+  await first.devTools.command("Network.emulateNetworkConditions", { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  const onlineNavigation = await first.devTools.evaluate("performance.timeOrigin");
+  await first.devTools.command("Page.reload");
+  await retry(async () => {
+    const offline = await first.devTools.evaluate(`performance.timeOrigin !== ${onlineNavigation} && document.readyState === 'complete' && Boolean(document.querySelector('#forecastPanel')?.textContent.includes('Resultado registrado'))`);
+    if (!offline) throw new Error("O app ainda não recarregou offline");
+  });
+  assert(await first.devTools.evaluate("!navigator.onLine && document.querySelectorAll('.summary-card').length === 8 && document.styleSheets.length > 0 && document.querySelector('#profileName').textContent==='João da Conceição' && document.querySelector('#profileInitials').textContent==='JC'"), "O app perdeu o perfil, o layout ou os módulos de planejamento offline");
+  await first.devTools.command("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  process.stdout.write("✓ PWA: recarregamento offline com módulos, estilos e planejamento locais\n");
 } finally {
   await closeBrowser(second);
   await closeBrowser(first);
   if (worker) {
     await stopProcess(worker);
-    await retry(() => rm(resolve(projectRoot, ".wrangler"), { recursive: true, force: true }), 8000).catch(() => {});
-    await retry(() => rm(resolve(projectRoot, ".dist"), { recursive: true, force: true }), 8000).catch(() => {});
+    if (originalTestHTML) await writeFile(resolve(projectRoot, ".dist", "index.html"), originalTestHTML);
+    if (workerState && workerState.startsWith(resolve(tmpdir(), "quanto-tem-worker-test-"))) await retry(() => rm(workerState, { recursive: true, force: true }), 8000).catch(() => {});
   }
 }

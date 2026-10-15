@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
-import { reportBounds, selectReportTransactions, reportTotals, csvBytes, buildReportPDF } from "../reports.js";
+import { reportBounds, selectReportTransactions, reportTotals, csvBytes, buildReportPDF, normalizeProfileName } from "../reports.js";
 
 assert.deepEqual(reportBounds({ period: "week", date: "2026-10-04" }), { start: "2026-09-28", end: "2026-10-04", label: "Semana de 28/09/2026 a 04/10/2026" });
 assert.equal(reportBounds({ period: "month", month: "2028-02" }).end, "2028-02-29");
@@ -45,10 +45,18 @@ assert(csv.includes('"Telefone; plano ""Família"""') && csv.includes("Cartão p
 assert(csv.includes('"03/10/2026";"Despesa"') && csv.includes('"65,00";"Pago"'));
 assert(csv.includes("\r\n") && !csv.includes("Ã§"));
 assert(new TextDecoder().decode(csvBytes([{ ...records[0], title: "=HYPERLINK(1)" }])).includes('"\'=HYPERLINK(1)"'));
+assert.equal(normalizeProfileName("  Joa\u0303o \n da   Conceição  "), "João da Conceição");
+assert.equal(normalizeProfileName(null), "");
+assert.equal(normalizeProfileName("a".repeat(100)).length, 80);
+const ownerCSV = new TextDecoder().decode(csvBytes(selected, { profileName: 'João "Silva"; Família' }));
+assert(ownerCSV.split("\r\n")[0].endsWith(';"Titular"'));
+assert(ownerCSV.includes(';"João ""Silva""; Família"\r\n'));
+assert(!csv.split("\r\n")[0].includes("Titular"), "CSV sem perfil deve preservar as colunas existentes");
+assert(new TextDecoder().decode(csvBytes(selected, { profileName: "=HYPERLINK(1)" })).includes(';"\'=HYPERLINK(1)"'));
 
 const [normal, bold] = await Promise.all(["NotoSans-Regular.ttf", "NotoSans-Bold.ttf"].map(async name => (await readFile(new URL(`../assets/fonts/${name}`, import.meta.url))).toString("base64")));
 const assets = { jsPDF, autoTable, normal, bold };
-const report = { items: withPending, periodLabel: month.label, categoryLabel: "Todas as categorias", typeLabel: "Entradas e despesas", generatedAt: new Date(2026, 9, 3, 10, 30) };
+const report = { items: withPending, profileName: "João da Conceição", periodLabel: month.label, categoryLabel: "Todas as categorias", typeLabel: "Entradas e despesas", generatedAt: new Date(2026, 9, 3, 10, 30) };
 const pdf = buildReportPDF(report, assets);
 assert.equal(new TextDecoder().decode(pdf.slice(0, 5)), "%PDF-");
 async function pdfText(data) {
@@ -64,11 +72,11 @@ async function pdfText(data) {
   return result;
 }
 const extracted = await pdfText(pdf.slice(0));
-for (const text of ["Descrição", "Educação", "Cartão principal", "Salário de João", "Família", "Observação com ação e ç", "Consulta médica", "Pendente", "2.180,00", "365,00"]) assert(extracted.text.includes(text), `PDF não preservou: ${text}`);
+for (const text of ["Titular: João da Conceição", "Descrição", "Educação", "Cartão principal", "Salário de João", "Família", "Observação com ação e ç", "Consulta médica", "Pendente", "2.180,00", "365,00"]) assert(extracted.text.includes(text), `PDF não preservou: ${text}`);
 const manyRows = Array.from({ length: 120 }, (_, index) => ({ ...records[1], id: `row-${index}`, title: `Lançamento ${index + 1} com acentuação`, note: index === 119 ? "ÚLTIMO REGISTRO: não pode ser cortado" : "Texto longo para confirmar a quebra de linha e de página sem cortar valores ou observações." }));
 const paged = await pdfText(buildReportPDF({ ...report, items: manyRows }, assets));
 assert(paged.pages > 2 && paged.text.includes("ÚLTIMO REGISTRO: não pode ser cortado"));
-paged.pageTexts.forEach((text, index) => assert(text.includes(`Página ${index + 1} de ${paged.pages}`) && text.includes("Descrição"), `Página ${index + 1} sem numeração ou cabeçalho repetido`));
+paged.pageTexts.forEach((text, index) => assert(text.includes(`Página ${index + 1} de ${paged.pages}`) && text.includes("Descrição") && text.includes("Titular: João da Conceição"), `Página ${index + 1} sem titular, numeração ou cabeçalho repetido`));
 if (process.argv.includes("--preview")) {
   const pdfPath = resolve(tmpdir(), "quanto-tem-relatorio-exemplo.pdf");
   await writeFile(pdfPath, new Uint8Array(pdf));
